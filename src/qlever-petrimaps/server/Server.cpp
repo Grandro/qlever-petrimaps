@@ -3,6 +3,7 @@
 // Authors: Patrick Brosi <brosi@informatik.uni-freiburg.de>
 
 #include <png.h>
+#include <sys/socket.h>
 
 #include <algorithm>
 #include <chrono>
@@ -60,6 +61,10 @@ Server::Server(size_t maxMemory, const std::string& cacheDir, int cacheLifetime)
 // _____________________________________________________________________________
 util::http::Answer Server::handle(const util::http::Req& req, int con) const {
   UNUSED(con);
+
+  // ignore SIGPIPE
+  signal(SIGPIPE, SIG_IGN);
+
   util::http::Answer a;
   try {
     Params params;
@@ -125,6 +130,9 @@ util::http::Answer Server::handle(const util::http::Req& req, int con) const {
 // _____________________________________________________________________________
 util::http::Answer Server::handleHeatMapReq(const Params& pars,
                                             int sock) const {
+  // ignore SIGPIPE
+  signal(SIGPIPE, SIG_IGN);
+
   if (pars.count("width") == 0 || pars.find("width")->second.empty())
     throw std::invalid_argument("No width (?width=) specified.");
   if (pars.count("height") == 0 || pars.find("height")->second.empty())
@@ -222,7 +230,7 @@ util::http::Answer Server::handleHeatMapReq(const Params& pars,
           int ppx = ((p.getX() - bbox.getLowerLeft().getX()) / mercW) * w;
           int ppy = h - ((p.getY() - bbox.getLowerLeft().getY()) / mercH) * h;
 
-          drawPoint(points[0], points2[0], px, py, w, h, style);
+          drawPoint(points[0], points2[0], px, py, w, h, style, 1);
           drawLine(image.data(), ppx, ppy, px, py, w, h);
         } else {
           if (i >= objs.size()) i = r->getClusters()[i - objs.size()].first;
@@ -232,7 +240,7 @@ util::http::Answer Server::handleHeatMapReq(const Params& pars,
           int px = ((p.getX() - bbox.getLowerLeft().getX()) / mercW) * w;
           int py = h - ((p.getY() - bbox.getLowerLeft().getY()) / mercH) * h;
 
-          drawPoint(points[0], points2[0], px, py, w, h, style);
+          drawPoint(points[0], points2[0], px, py, w, h, style, 1);
         }
       }
     } else {
@@ -265,7 +273,8 @@ util::http::Answer Server::handleHeatMapReq(const Params& pars,
                     h;
 
             drawPoint(points[omp_get_thread_num()],
-                      points2[omp_get_thread_num()], px, py, w, h, style);
+                      points2[omp_get_thread_num()], px, py, w, h, style,
+                      cell->size());
           } else {
             for (auto i : *cell) {
               if (i >= r->getObjects().size()) {
@@ -279,7 +288,7 @@ util::http::Answer Server::handleHeatMapReq(const Params& pars,
               int py =
                   h - ((p.getY() - bbox.getLowerLeft().getY()) / mercH) * h;
               drawPoint(points[omp_get_thread_num()],
-                        points2[omp_get_thread_num()], px, py, w, h, style);
+                        points2[omp_get_thread_num()], px, py, w, h, style, 1);
             }
           }
         }
@@ -519,7 +528,8 @@ util::http::Answer Server::handleHeatMapReq(const Params& pars,
   size_t writes = 0;
 
   while (writes != buff.size()) {
-    int64_t out = write(sock, buff.c_str() + writes, buff.size() - writes);
+    int64_t out =
+        send(sock, buff.c_str() + writes, buff.size() - writes, MSG_NOSIGNAL);
     if (out < 0) {
       if (errno == EWOULDBLOCK || errno == EAGAIN || errno == EINTR) continue;
       throw std::runtime_error("Failed to write to socket");
@@ -870,8 +880,8 @@ inline void pngWriteCb(png_structp png_ptr, png_bytep data, png_size_t length) {
   size_t writes = 0;
 
   while (writes != length) {
-    int64_t out =
-        write(sock, reinterpret_cast<char*>(data) + writes, length - writes);
+    int64_t out = send(sock, reinterpret_cast<char*>(data) + writes,
+                       length - writes, MSG_NOSIGNAL);
     if (out < 0) {
       if (errno == EWOULDBLOCK || errno == EAGAIN || errno == EINTR) continue;
       break;
@@ -1027,7 +1037,8 @@ util::http::Answer Server::handleExportReq(const Params& pars, int sock) const {
   size_t writes = 0;
 
   while (writes != buff.size()) {
-    int64_t out = write(sock, buff.c_str() + writes, buff.size() - writes);
+    int64_t out =
+        send(sock, buff.c_str() + writes, buff.size() - writes, MSG_NOSIGNAL);
     if (out < 0) {
       if (errno == EWOULDBLOCK || errno == EAGAIN || errno == EINTR) continue;
       throw std::runtime_error("Failed to write to socket");
@@ -1092,8 +1103,8 @@ util::http::Answer Server::handleExportReq(const Params& pars, int sock) const {
         size_t writes = 0;
 
         while (writes != buff.size()) {
-          int64_t out =
-              write(sock, buff.c_str() + writes, buff.size() - writes);
+          int64_t out = send(sock, buff.c_str() + writes, buff.size() - writes,
+                             MSG_NOSIGNAL);
           if (out < 0) {
             if (errno == EWOULDBLOCK || errno == EAGAIN || errno == EINTR)
               continue;
@@ -1107,7 +1118,8 @@ util::http::Answer Server::handleExportReq(const Params& pars, int sock) const {
   writes = 0;
 
   while (writes != buff.size()) {
-    int64_t out = write(sock, buff.c_str() + writes, buff.size() - writes);
+    int64_t out =
+        send(sock, buff.c_str() + writes, buff.size() - writes, MSG_NOSIGNAL);
     if (out < 0) {
       if (errno == EWOULDBLOCK || errno == EAGAIN || errno == EINTR) continue;
       throw std::runtime_error("Failed to write to socket");
@@ -1140,21 +1152,21 @@ util::http::Answer Server::handleLoadStatusReq(const Params& pars) const {
 // _____________________________________________________________________________
 void Server::drawPoint(std::vector<uint32_t>& points,
                        std::vector<double>& points2, int px, int py, int w,
-                       int h, MapStyle style) const {
+                       int h, MapStyle style, size_t num) const {
   if (style == OBJECTS) {
     // for the raw style, increase the size of the points a bit
     for (int x = px - 2; x < px + 2; x++) {
       for (int y = py - 2; y < py + 2; y++) {
         if (x >= 0 && y >= 0 && x < w && y < h) {
           if (points2[w * y + x] == 0) points.push_back(w * y + x);
-          points2[w * y + x] += 1;
+          points2[w * y + x] += num;
         }
       }
     }
   } else {
     if (px >= 0 && py >= 0 && px < w && py < h) {
       if (points2[w * py + px] == 0) points.push_back(w * py + px);
-      points2[w * py + px] += 1;
+      points2[w * py + px] += num;
     }
   }
 }
