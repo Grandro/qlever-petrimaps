@@ -1,3 +1,6 @@
 [submodule "src/util"]
 	path = src/util
 	url = https://github.com/ad-freiburg/util
+[submodule "src/libpqxx"]
+	path = src/libpqxx
+	url = https://github.com/jtv/libpqxx.git
