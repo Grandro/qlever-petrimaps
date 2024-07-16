@@ -5,6 +5,7 @@
 #include <curl/curl.h>
 
 #include <iostream>
+#include <pqxx/pqxx>
 
 #include "qlever-petrimaps/server/Server.h"
 #include "util/Misc.h"
