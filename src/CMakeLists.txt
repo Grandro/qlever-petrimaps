@@ -7,4 +7,3 @@ include_directories(
 add_subdirectory(util)
 add_subdirectory(3rdparty)
 add_subdirectory(qlever-petrimaps)
-add_subdirectory(libpqxx)

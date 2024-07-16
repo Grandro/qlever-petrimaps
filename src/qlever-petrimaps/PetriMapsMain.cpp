@@ -84,6 +84,31 @@ int main(int argc, char** argv) {
     throw std::runtime_error(ss.str());
   }
 
+  // libpqxx test
+  try {
+    // Connect to the database
+    std::string conn = "host=localhost port=5432 dbname=test_database user=grandro password=123456";
+    pqxx::connection c(conn.c_str());
+
+    // Start a transaction. You always work in one.
+    pqxx::work w(c);
+
+    // Return single row of data, number 1.
+    pqxx::row r = w.exec1("SELECT 1");
+
+    // Commit transaction. This is not executed if
+    // exception occured.
+    w.commit();
+
+    // r[0] contains first field. Use as<...>() to
+    // convert from string to other datatype.
+    std::cout << r[0].as<int>() << std::endl;
+  } catch (std::exception const &e) {
+    std::cerr << e.what() << std::endl;
+    return 1;
+  }
+  // ------------
+
   LOG(INFO) << "Starting server...";
   LOG(INFO) << "Max memory is " << maxMemoryGB << " GB...";
   Server serv(maxMemoryGB * 1000000000, cacheDir, cacheLifetime);

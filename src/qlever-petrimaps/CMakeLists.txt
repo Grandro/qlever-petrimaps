@@ -1,6 +1,10 @@
 file(GLOB_RECURSE QLEVER_PETRIMAPS_SRC *.cpp)
 find_package(PNG REQUIRED)
 
+find_package(PostgreSQL REQUIRED)
+find_package(PkgConfig REQUIRED)
+pkg_check_modules(PQXX REQUIRED libpqxx)
+
 set(qlever_petrimaps_main PetriMapsMain.cpp)
 
 list(REMOVE_ITEM QLEVER_PETRIMAPS_SRC ${qlever_petrimaps_main})
@@ -38,4 +42,4 @@ add_custom_target(htmlfiles DEPENDS index.h build.h style.h)
 
 add_dependencies(qlever_petrimaps_dep htmlfiles)
 
-target_link_libraries(petrimaps qlever_petrimaps_dep 3rdparty_dep util pqxx ${PNG_LIBRARIES} -lpthread -lcurl)
+target_link_libraries(petrimaps PRIVATE qlever_petrimaps_dep 3rdparty_dep util pqxx ${PQXX_LINK_LIBRARIES} PostgreSQL::PostgreSQL ${PNG_LIBRARIES} -lpthread -lcurl)
