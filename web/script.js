@@ -447,13 +447,31 @@ function setSubmitMenuVisible(visible) {
     }
 }
 
-const queryElem = document.getElementById("query");
-$(document).ready(function () {
+$(document).ready(function() {
     initMap();
 
     // Focus default submit tab
     document.getElementById("submit-tabs-default_open").click();
     selectedBackendElem = document.getElementById("backend-wikidata");
+
+    // Initialize the editor.
+    sqlEditor = CodeMirror.fromTextArea(document.getElementById("submit-sql-query"), {
+        indentWithTabs: true,
+        smartIndent: false,
+        lineNumbers: true,
+        matchBrackets: true,
+        autoCloseBrackets: true,
+        autofocus: true,
+        styleSelectedText: true,
+        styleActiveLine: true
+    });
+
+    sqlEditor.setSize(null, 396);
+
+    // Fix query editor code lines overlapping with code
+    // According to https://github.com/mdn/bob/issues/976 this is fixed in CodeMirror v6
+    editor.refresh();
+    sqlEditor.refresh()
 
     // Process params in URL
     if (urlParams.has("query")) {
@@ -462,7 +480,7 @@ $(document).ready(function () {
     }
     if (urlParams.has("backend")) {
         const backend = urlParams.get("backend");
-        const dropdownOptionsElem = document.getElementById("dropdown-options");
+        const dropdownOptionsElem = document.getElementById("submit-sparql-dropdown-options");
         let listItems = dropdownOptionsElem.getElementsByTagName("li");
         for (const listItem of listItems) {
             const dataUrl = listItem.getAttribute("data-url");
@@ -482,10 +500,6 @@ $(document).ready(function () {
         // No useful information in url => Show submit menu
         setSubmitMenuVisible(true);
     }
-
-    // Fix query editor code lines overlapping with code
-    // According to https://github.com/mdn/bob/issues/976 this is fixed in CodeMirror v6
-    editor.refresh();
 });
 
 document.getElementById("options-ex-geojson").onclick = function() {
@@ -503,14 +517,14 @@ document.getElementById("options-submit").onclick = function() {
 
 function onClickSubmitButton() {
     switch (tabName) {
-        case "query":
+        case "sparql":
             const query = editor.getDoc().getValue();
             const backend = selectedBackendElem.getAttribute("data-url")
             fetchQuery(query, backend);
             break;
 
-        case "geoJsonFile":
-            const fileElem = document.getElementById("submit-geoJsonFile-file");
+        case "geoJson":
+            const fileElem = document.getElementById("submit-geoJson-file");
             const file = fileElem.files[0];
             if (file) {
                 fileToText(file);
@@ -563,8 +577,7 @@ function onMapBaseLayerChange(event) {
 }
 
 function onBackendSelected(id) {
-    const elemId = "backend-" + id;
-    const ids = [selectedBackendElem.id, elemId];
+    const ids = [selectedBackendElem.id, id];
     for (let i = 0; i < 2; i++) {
         const isSelected = i == 1;
         const curId = ids[i];
@@ -575,7 +588,7 @@ function onBackendSelected(id) {
         curElem.innerHTML = text;
     }
 
-    selectedBackendElem = document.getElementById(elemId);
-    const dropdownButtonTextElem = document.getElementById("dropdown-button-text");
+    selectedBackendElem = document.getElementById(id);
+    const dropdownButtonTextElem = document.getElementById("submit-sparql-dropdown-button-text");
     dropdownButtonTextElem.innerHTML = selectedBackendElem.getAttribute("data-text");
 }
