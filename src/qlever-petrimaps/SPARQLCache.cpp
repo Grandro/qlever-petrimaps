@@ -71,28 +71,61 @@ static const std::string& selectQueryBasedOnUrl(const std::string& backendUrl,
 }
 
 // _____________________________________________________________________________
+double SPARQLCache::getLoadStatusPercentTotal() {
+  /*
+  There are 2 loading stages: Parse, afterwards ParseIds.
+  Because ParseIds is usually pretty short, we merge the progress of both stages
+  to one total progress. Progress is calculated by _curRow / _totalSize, which
+  are handled by each stage individually.
+  */
+  if (_totalSize == 0) {
+    return 0.0;
+  }
+
+  double parsePercent = 95.0;
+  double parseIdsPercent = 5.0;
+  double totalPercent = 0.0;
+  switch (_loadStatusStage) {
+    case _LoadStatusStages::Parse:
+      totalPercent += _curRow / static_cast<double>(_totalSize) * parsePercent;
+      break;
+    case _LoadStatusStages::ParseIds:
+      totalPercent += parsePercent;
+      totalPercent += _curRow / static_cast<double>(_totalSize) * parseIdsPercent;
+      break;
+    case _LoadStatusStages::FromFile:
+      totalPercent += _curRow / static_cast<double>(_totalSize) * 100.0;
+      break;
+  }
+
+  return std::min(100.0, totalPercent);
+}
+
+// _____________________________________________________________________________
+int SPARQLCache::getLoadStatusStage() {
+  return _loadStatusStage;
+}
+
+// _____________________________________________________________________________
 const std::string& SPARQLCache::getQuery(const std::string& backendUrl) const {
   return selectQueryBasedOnUrl(backendUrl, QUERY_ASWKT, QUERY_WD, QUERY);
 }
 
 // _____________________________________________________________________________
-const std::string& SPARQLCache::getCountQuery(
-    const std::string& backendUrl) const {
+const std::string& SPARQLCache::getCountQuery(const std::string& backendUrl) const {
   return selectQueryBasedOnUrl(backendUrl, COUNT_QUERY_ASWKT, COUNT_QUERY_WD,
                                COUNT_QUERY);
 }
 
 // _____________________________________________________________________________
-size_t SPARQLCache::writeCbString(void* contents, size_t size, size_t nmemb,
-                                  void* userp) {
+size_t SPARQLCache::writeCbString(void* contents, size_t size, size_t nmemb, void* userp) {
   size_t realsize = size * nmemb;
   ((std::string*)userp)->append((char*)contents, realsize);
   return realsize;
 }
 
 // _____________________________________________________________________________
-size_t SPARQLCache::writeCb(void* contents, size_t size, size_t nmemb,
-                            void* userp) {
+size_t SPARQLCache::writeCb(void* contents, size_t size, size_t nmemb, void* userp) {
   size_t realsize = size * nmemb;
   try {
     static_cast<SPARQLCache*>(userp)->parse(static_cast<const char*>(contents),
@@ -105,8 +138,7 @@ size_t SPARQLCache::writeCb(void* contents, size_t size, size_t nmemb,
 }
 
 // _____________________________________________________________________________
-size_t SPARQLCache::writeCbIds(void* contents, size_t size, size_t nmemb,
-                               void* userp) {
+size_t SPARQLCache::writeCbIds(void* contents, size_t size, size_t nmemb, void* userp) {
   size_t realsize = size * nmemb;
   try {
     static_cast<SPARQLCache*>(userp)->parseIds(
@@ -119,8 +151,7 @@ size_t SPARQLCache::writeCbIds(void* contents, size_t size, size_t nmemb,
 }
 
 // _____________________________________________________________________________
-size_t SPARQLCache::writeCbCount(void* contents, size_t size, size_t nmemb,
-                                 void* userp) {
+size_t SPARQLCache::writeCbCount(void* contents, size_t size, size_t nmemb, void* userp) {
   size_t realsize = size * nmemb;
   try {
     static_cast<SPARQLCache*>(userp)->parseCount(
@@ -330,7 +361,7 @@ void SPARQLCache::parse(const char* c, size_t size) {
             if (_curRow % 1000000 == 0) {
               LOG(INFO) << "[GEOMCACHE] "
                         << "@ row " << _curRow << " (" << std::fixed
-                        << std::setprecision(2) << getLoadStatusPercent()
+                        << std::setprecision(2) << getLoadStatusPercentCurrent()
                         << "%, " << _pointsFSize << " points, " << _linesFSize
                         << " (open) polygons, " << _geometryDuplicates
                         << " duplicates)";
@@ -371,7 +402,7 @@ void SPARQLCache::parseIds(const char* c, size_t size) {
       if (_curRow % 1000000 == 0) {
         LOG(INFO) << "[GEOMCACHE] "
                   << "@ row " << _curRow << " (" << std::fixed
-                  << std::setprecision(2) << getLoadStatusPercent() << "%, "
+                  << std::setprecision(2) << getLoadStatusPercentCurrent() << "%, "
                   << _pointsFSize << " points, " << _linesFSize
                   << " (open) polygons)";
       }
@@ -1086,12 +1117,12 @@ std::string SPARQLCache::requestIndexHash() {
 }
 
 // _____________________________________________________________________________
-std::string SPARQLCache::load(const std::string& cacheDir) {
+void SPARQLCache::load(const std::string& cacheDir) {
   std::lock_guard<std::mutex> guard(_m);
 
   if (_ready) {
     auto indexHash = requestIndexHash();
-    if (_indexHash == indexHash) return _indexHash;
+    if (_indexHash == indexHash) return;
     LOG(INFO) << "Loaded index hash (" << _indexHash
               << ") and remote index hash (" << indexHash << ") dont match.";
     _ready = false;
@@ -1129,5 +1160,5 @@ std::string SPARQLCache::load(const std::string& cacheDir) {
   }
 
   _ready = true;
-  return _indexHash;
+  return;
 }

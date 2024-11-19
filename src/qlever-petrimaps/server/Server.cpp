@@ -16,23 +16,22 @@
 #include <unordered_set>
 #include <vector>
 
-#include "3rdparty/heatmap.h"
-#include "3rdparty/colorschemes/Spectral.h"
-#include "3rdparty/md5/md5.cpp"
-#include "3rdparty/md5/md5.h"
+#include "qlever-petrimaps/server/Server.h"
 #include "qlever-petrimaps/build.h"
 #include "qlever-petrimaps/index.h"
-#include "qlever-petrimaps/server/GeoJSONRequestor.h"
-#include "qlever-petrimaps/server/Requestor.h"
 #include "qlever-petrimaps/server/SPARQLRequestor.h"
-#include "qlever-petrimaps/server/Server.h"
+#include "qlever-petrimaps/server/SQLRequestor.h"
+#include "qlever-petrimaps/server/GeoJSONRequestor.h"
 #include "qlever-petrimaps/style.h"
 #include "util/Misc.h"
 #include "util/String.h"
 #include "util/geo/Geo.h"
 #include "util/geo/output/GeoJsonOutput.cpp"
-#include "util/http/Server.h"
+#include "util/http/HTTPServer.h"
 #include "util/log/Log.h"
+#include "3rdparty/heatmap.h"
+#include "3rdparty/colorschemes/Spectral.h"
+#include "3rdparty/md5/md5.h"
 #ifdef _OPENMP
 #include <omp.h>
 #else
@@ -81,8 +80,10 @@ util::http::Answer Server::handle(const util::http::Req& req, int con) const {
           std::string(index_html,
                       index_html + sizeof index_html / sizeof index_html[0]));
       a.params["Content-Type"] = "text/html; charset=utf-8";
-    } else if (cmd == "/query") {
-      a = handleQueryReq(params);
+    } else if (cmd == "/SPARQLquery") {
+      a = handleSPARQLQueryReq(params);
+    } else if (cmd == "/SQLquery") {
+      a = handleSQLQueryReq(params);
     } else if (cmd == "/geoJsonHash") {
       a = handleGeoJsonHashReq(params);
     } else if (cmd == "/geoJsonFile") {
@@ -134,6 +135,622 @@ util::http::Answer Server::handle(const util::http::Req& req, int con) const {
   a.params["Server"] = "qlever-petrimaps";
 
   return a;
+}
+
+// _____________________________________________________________________________
+util::http::Answer Server::handleSPARQLQueryReq(const Params& pars) const {
+  if (pars.count("SPARQL_query") == 0 || pars.find("SPARQL_query")->second.empty())
+    throw std::invalid_argument("No SPARQL query (?SPARQL_query=) specified.");
+  if (pars.count("SPARQL_backend") == 0 || pars.find("SPARQL_backend")->second.empty())
+    throw std::invalid_argument("No SPARQL backend (?SPARQL_backend=) specified.");
+  std::string query = pars.find("SPARQL_query")->second;
+  std::string backend = pars.find("SPARQL_backend")->second;
+
+  LOG(INFO) << "[SERVER] SPARQL: Queried backend is " << backend;
+  LOG(INFO) << "[SERVER] SPARQL: Query is:\n" << query;
+
+  std::shared_ptr<SPARQLCache> cache = std::dynamic_pointer_cast<SPARQLCache>(createCache(backend, GeomCache::SourceType::backend));
+  loadCache(cache, backend);
+  std::string indexHash = cache->getIndexHash();
+
+  std::string requestId = backend + "$" + indexHash + "$" + query;
+  std::shared_ptr<SPARQLRequestor> reqor;
+  std::string sessionId;
+  {
+    std::lock_guard<std::mutex> guard(_m);
+    if (_requestCache.count(requestId)) {
+      sessionId = _requestCache[requestId];
+      reqor = std::dynamic_pointer_cast<SPARQLRequestor>(_rs[sessionId]);
+    } else {
+      reqor = std::shared_ptr<SPARQLRequestor>(new SPARQLRequestor(
+          std::dynamic_pointer_cast<SPARQLCache>(_caches[backend]),
+          _maxMemory));
+      sessionId = getSessionId();
+
+      _rs[sessionId] = std::dynamic_pointer_cast<Requestor>(reqor);
+      _requestCache[requestId] = sessionId;
+    }
+  }
+
+  try {
+    reqor->request(query);
+  } catch (OutOfMemoryError& ex) {
+    LOG(ERROR) << ex.what() << backend;
+
+    // delete cache, is now in unready state
+    {
+      std::lock_guard<std::mutex> guard(_m);
+      clearSession(sessionId);
+    }
+
+    auto answ = util::http::Answer("406 Not Acceptable", ex.what());
+    answ.params["Content-Type"] = "application/json; charset=utf-8";
+    return answ;
+  }
+
+  reqor->getPointGrid().getBBox();
+  auto bbox = reqor->getPointGrid().getBBox();
+  bbox = extendBox(reqor->getLineGrid().getBBox(), bbox);
+
+  size_t numObjs = reqor->getNumObjects();
+
+  auto ll = bbox.getLowerLeft();
+  auto ur = bbox.getUpperRight();
+
+  double llX = ll.getX();
+  double llY = ll.getY();
+  double urX = ur.getX();
+  double urY = ur.getY();
+
+  std::stringstream json;
+  json << std::fixed << "{\"qid\" : \"" << sessionId << "\",\"bounds\":[["
+       << llX << "," << llY << "],[" << urX << "," << urY << "]]"
+       << ",\"numobjects\":" << numObjs << "}";
+
+  auto answ = util::http::Answer("200 OK", json.str());
+  answ.params["Content-Type"] = "application/json; charset=utf-8";
+
+  return answ;
+}
+
+// _____________________________________________________________________________
+util::http::Answer Server::handleSQLQueryReq(const Params& pars) const {
+  if (pars.count("SQL_query") == 0 || pars.find("SQL_query")->second.empty())
+    throw std::invalid_argument("No SQL query (?SQL_query=) specified.");
+  std::string query = pars.find("SQL_query")->second;
+  
+  LOG(INFO) << "[SERVER] SQL: Query is:\n" << query;
+  
+  // Choose "SQL" as source, in the future this could become a database name
+  std::shared_ptr<SQLCache> cache = std::dynamic_pointer_cast<SQLCache>(createCache("SQL", GeomCache::SourceType::SQL));
+  cache->setQuery(query);
+  loadCache(cache, "SQL");
+
+  std::string requestId = query;
+  std::shared_ptr<SQLRequestor> reqor;
+  std::string sessionId;
+  {
+    std::lock_guard<std::mutex> guard(_m);
+    if (_requestCache.count(requestId)) {
+      sessionId = _requestCache[requestId];
+      reqor = std::dynamic_pointer_cast<SQLRequestor>(_rs[sessionId]);
+    } else {
+      reqor = std::shared_ptr<SQLRequestor>(new SQLRequestor(
+          std::dynamic_pointer_cast<SQLCache>(_caches["SQL"]),
+          _maxMemory));
+      sessionId = getSessionId();
+
+      _rs[sessionId] = std::dynamic_pointer_cast<Requestor>(reqor);
+      _requestCache[requestId] = sessionId;
+    }
+  }
+
+  try {
+    reqor->request(query);
+  } catch (OutOfMemoryError& ex) {
+    LOG(ERROR) << ex.what();
+
+    // delete cache, is now in unready state
+    {
+      std::lock_guard<std::mutex> guard(_m);
+      clearSession(sessionId);
+    }
+
+    auto answ = util::http::Answer("406 Not Acceptable", ex.what());
+    answ.params["Content-Type"] = "application/json; charset=utf-8";
+    return answ;
+  }
+
+  reqor->getPointGrid().getBBox();
+  auto bbox = reqor->getPointGrid().getBBox();
+  bbox = extendBox(reqor->getLineGrid().getBBox(), bbox);
+
+  size_t numObjs = reqor->getNumObjects();
+
+  auto ll = bbox.getLowerLeft();
+  auto ur = bbox.getUpperRight();
+
+  double llX = ll.getX();
+  double llY = ll.getY();
+  double urX = ur.getX();
+  double urY = ur.getY();
+
+  std::stringstream json;
+  json << std::fixed << "{\"qid\" : \"" << sessionId << "\",\"bounds\":[["
+       << llX << "," << llY << "],[" << urX << "," << urY << "]]"
+       << ",\"numobjects\":" << numObjs << "}";
+
+  auto answ = util::http::Answer("200 OK", json.str());
+  answ.params["Content-Type"] = "application/json; charset=utf-8";
+
+  return answ;
+}
+
+// _____________________________________________________________________________
+util::http::Answer Server::handleGeoJsonFileReq(const Params& pars) const {
+  std::string md5_hash = pars.find("geoJsonHash")->second;
+
+  std::shared_ptr<GeoJSONCache> cache = std::dynamic_pointer_cast<GeoJSONCache>(createCache(md5_hash, GeomCache::SourceType::geoJSON));
+  loadCache(cache, "GeoJson");
+
+  std::string requestId = md5_hash;
+  std::shared_ptr<GeoJSONRequestor> reqor;
+  std::string sessionId;
+  {
+    std::lock_guard<std::mutex> guard(_m);
+    if (_requestCache.count(requestId)) {
+      sessionId = _requestCache[requestId];
+      reqor = std::dynamic_pointer_cast<GeoJSONRequestor>(_rs[sessionId]);
+    } else {
+      sessionId = getSessionId();
+      reqor = std::shared_ptr<GeoJSONRequestor>(
+          new GeoJSONRequestor(cache, _maxMemory));
+
+      _rs[sessionId] = std::dynamic_pointer_cast<Requestor>(reqor);
+      _requestCache[requestId] = sessionId;
+    }
+  }
+
+  try {
+    reqor->request();
+  } catch (OutOfMemoryError& ex) {
+    LOG(ERROR) << ex.what();
+
+    // delete cache, is now in unready state
+    {
+      std::lock_guard<std::mutex> guard(_m);
+      clearSession(sessionId);
+    }
+
+    auto answ = util::http::Answer("406 Not Acceptable", ex.what());
+    answ.params["Content-Type"] = "application/json; charset=utf-8";
+    return answ;
+  }
+
+  util::geo::FBox bbox = reqor->getPointGrid().getBBox();
+  bbox = extendBox(reqor->getLineGrid().getBBox(), bbox);
+  util::geo::FPoint ll = bbox.getLowerLeft();
+  util::geo::FPoint ur = bbox.getUpperRight();
+  float llX = ll.getX();
+  float llY = ll.getY();
+  float urX = ur.getX();
+  float urY = ur.getY();
+  size_t numObjs = reqor->getNumObjects();
+
+  std::stringstream json;
+  json << std::fixed << "{\"qid\" : \"" << sessionId << "\",\"bounds\":[["
+       << llX << "," << llY << "],[" << urX << "," << urY << "]]"
+       << ",\"numobjects\":" << numObjs << "}";
+
+  auto answ = util::http::Answer("200 OK", json.str());
+  answ.params["Content-Type"] = "application/json; charset=utf-8";
+
+  return answ;
+}
+
+// _____________________________________________________________________________
+util::http::Answer Server::handleGeoJsonHashReq(const Params& pars) const {
+  std::string content = pars.find("geoJsonFile")->second;
+
+  // Create MD5-Hash of content
+  std::string md5_hash = md5(content);
+  createCache(md5_hash, GeomCache::SourceType::geoJSON);
+  std::shared_ptr<GeoJSONCache> cache =
+      std::dynamic_pointer_cast<GeoJSONCache>(_caches[md5_hash]);
+  cache->setContent(content);
+
+  auto answ = util::http::Answer("200 OK", md5_hash);
+  answ.params["Content-Type"] = "application/json; charset=utf-8";
+
+  return answ;
+}
+
+// _____________________________________________________________________________
+util::http::Answer Server::handleGeoJSONReq(const Params& pars) const {
+  if (pars.count("id") == 0 || pars.find("id")->second.empty())
+    throw std::invalid_argument("No session id (?id=) specified.");
+  auto id = pars.find("id")->second;
+
+  if (pars.count("rad") == 0 || pars.find("rad")->second.empty())
+    throw std::invalid_argument("No rad (?rad=) specified.");
+  auto rad = std::atof(pars.find("rad")->second.c_str());
+
+  if (pars.count("gid") == 0 || pars.find("gid")->second.empty())
+    throw std::invalid_argument("No geom id (?gid=) specified.");
+  auto gid = std::atoi(pars.find("gid")->second.c_str());
+
+  bool noExport = pars.count("export") == 0 ||
+                  pars.find("export")->second.empty() ||
+                  !std::atoi(pars.find("export")->second.c_str());
+
+  LOG(INFO) << "[SERVER] GeoJSON request for " << gid;
+
+  std::shared_ptr<Requestor> reqor;
+  {
+    std::lock_guard<std::mutex> guard(_m);
+    bool has = _rs.count(id);
+    if (!has) {
+      throw std::invalid_argument("Session not found");
+    }
+    reqor = _rs[id];
+  }
+
+  if (!reqor->ready()) {
+    throw std::invalid_argument("Session not ready.");
+  }
+  // as soon as we are ready, the reqor can be read concurrently
+
+  auto res = reqor->getGeom(gid, rad);
+
+  util::json::Val attrs;
+  if (!noExport) {
+    for (auto col : reqor->requestRow(reqor->getObjects()[gid].second)) {
+      attrs.dict[col.first] = col.second;
+    }
+  }
+
+  std::stringstream json;
+  GeoJsonOutput out(json);
+  processGeoJsonOutput(out, res, attrs);
+
+  auto answ = util::http::Answer("200 OK", json.str());
+  answ.params["Content-Type"] = "application/json; charset=utf-8";
+  if (!noExport) {
+    answ.params["Content-Disposition"] = "attachment;filename:\"export.json\"";
+  }
+
+  return answ;
+}
+
+// _____________________________________________________________________________
+util::http::Answer Server::handleClearSessReq(const Params& pars) const {
+  std::string id;
+  if (pars.count("id") != 0 && !pars.find("id")->second.empty())
+    id = pars.find("id")->second;
+
+  {
+    std::lock_guard<std::mutex> guard(_m);
+    if (id.size())
+      clearSession(id);
+    else
+      clearSessions();
+  }
+
+  auto answ = util::http::Answer("200 OK", "{}");
+  answ.params["Content-Type"] = "application/json; charset=utf-8";
+
+  return answ;
+}
+
+// _____________________________________________________________________________
+util::http::Answer Server::handleLoadReq(const Params& pars) const {
+  if (pars.count("backend") == 0 || pars.find("backend")->second.empty())
+    throw std::invalid_argument("No backend (?backend=) specified.");
+  auto backend = pars.find("backend")->second;
+
+  LOG(INFO) << "[SERVER] Queried backend is " << backend;
+
+  std::shared_ptr<SPARQLCache> cache = std::dynamic_pointer_cast<SPARQLCache>(createCache(backend, GeomCache::SourceType::backend));
+  loadCache(cache, backend);
+
+  auto answ = util::http::Answer("200 OK", "{}");
+  answ.params["Content-Type"] = "application/json; charset=utf-8";
+  return answ;
+}
+
+// _____________________________________________________________________________
+util::http::Answer Server::handlePosReq(const Params& pars) const {
+  if (pars.count("x") == 0 || pars.find("x")->second.empty())
+    throw std::invalid_argument("No x coord (?x=) specified.");
+  float x = std::atof(pars.find("x")->second.c_str());
+
+  if (pars.count("y") == 0 || pars.find("y")->second.empty())
+    throw std::invalid_argument("No y coord (?y=) specified.");
+  float y = std::atof(pars.find("y")->second.c_str());
+
+  if (pars.count("id") == 0 || pars.find("id")->second.empty())
+    throw std::invalid_argument("No session id (?id=) specified.");
+  auto id = pars.find("id")->second;
+
+  if (pars.count("rad") == 0 || pars.find("rad")->second.empty())
+    throw std::invalid_argument("No rad (?rad=) specified.");
+  auto rad = std::atof(pars.find("rad")->second.c_str());
+
+  if (pars.count("width") == 0 || pars.find("width")->second.empty())
+    throw std::invalid_argument("No width (?width=) specified.");
+  if (pars.count("height") == 0 || pars.find("height")->second.empty())
+    throw std::invalid_argument("No height (?height=) specified.");
+
+  if (pars.count("bbox") == 0 || pars.find("bbox")->second.empty())
+    throw std::invalid_argument("No bbox specified.");
+  auto box = util::split(pars.find("bbox")->second, ',');
+
+  MapStyle style = HEATMAP;
+  if (pars.count("styles") != 0 && !pars.find("styles")->second.empty()) {
+    if (pars.find("styles")->second == "objects") style = OBJECTS;
+  }
+
+  if (box.size() != 4) throw std::invalid_argument("Invalid request.");
+
+  double x1 = std::atof(box[0].c_str());
+  double y1 = std::atof(box[1].c_str());
+  double x2 = std::atof(box[2].c_str());
+  double y2 = std::atof(box[3].c_str());
+  double mercH = fabs(y2 - y1);
+
+  auto fbbox = FBox({x1, y1}, {x2, y2});
+
+  int h = atoi(pars.find("height")->second.c_str());
+
+  double reso = mercH / h;
+
+  // res of -1 means dont render clusters
+  if (style == HEATMAP || reso >= THRESHOLD) reso = -1;
+
+  LOG(INFO) << "[SERVER] Click at " << x << ", " << y;
+
+  std::shared_ptr<Requestor> reqor;
+  {
+    std::lock_guard<std::mutex> guard(_m);
+    bool has = _rs.count(id);
+    if (!has) {
+      throw std::invalid_argument("Session not found");
+    }
+    reqor = _rs[id];
+  }
+
+  if (!reqor->ready()) {
+    throw std::invalid_argument("Session not ready.");
+  }
+  // as soon as we are ready, the reqor can be read concurrently
+
+  auto res = reqor->getNearest({x, y}, rad, reso, fbbox);
+
+  std::stringstream json;
+  json << "[";
+  if (res.has) {
+    json << "{\"id\" :" << res.id;
+    json << ",\"attrs\" : [";
+
+    bool first = true;
+
+    for (const auto& kv : res.cols) {
+      if (!first) {
+        json << ",";
+      }
+      json << "[\"" << util::jsonStringEscape(kv.first) << "\",\""
+           << util::jsonStringEscape(kv.second) << "\"]";
+
+      first = false;
+    }
+
+    auto ll =
+        webMercToLatLng<float>(res.pos.front().getX(), res.pos.front().getY());
+    json << "]";
+    json << std::setprecision(10) << ",\"ll\":{\"lat\" : " << ll.getY()
+         << ",\"lng\":" << ll.getX() << "}";
+
+    // Why does this block of code not work?:
+    /*json << ",\"geom\":";
+    GeoJsonOutput out(json);
+    if (res.poly.size()) {
+      out.printLatLng(res.poly, {});
+    } else if (res.line.size()) {
+      out.printLatLng(res.line, {});
+    } else {
+      out.printLatLng(res.pos, {});
+    }*/
+
+    // Or:
+    // processGeoJsonOutput(out, res, {});
+
+    json << ",\"geom\":";
+    if (res.poly.size()) {
+      GeoJsonOutput out(json);
+      if (res.poly.size() == 1) {
+        out.printLatLng(res.poly[0], {});
+      } else {
+        out.printLatLng(res.poly, {});
+      }
+    } else if (res.line.size()) {
+      GeoJsonOutput out(json);
+      if (res.line.size() == 1) {
+        out.printLatLng(res.line[0], {});
+      } else {
+        out.printLatLng(res.line, {});
+      }
+    } else {
+      GeoJsonOutput out(json);
+      if (res.pos.size() == 1) {
+        out.printLatLng(res.pos[0], {});
+      } else {
+        out.printLatLng(res.pos, {});
+      }
+    }
+
+    json << "}";
+  }
+  json << "]";
+
+  auto answ = util::http::Answer("200 OK", json.str());
+  answ.params["Content-Type"] = "application/json; charset=utf-8";
+
+  return answ;
+}
+
+// _____________________________________________________________________________
+util::http::Answer Server::handleExportReq(const Params& pars, int sock) const {
+  // ignore SIGPIPE
+  signal(SIGPIPE, SIG_IGN);
+
+  auto aw = util::http::Answer("200 OK", "");
+
+  if (pars.count("id") == 0 || pars.find("id")->second.empty())
+    throw std::invalid_argument("No session id (?id=) specified.");
+  auto id = pars.find("id")->second;
+
+  std::shared_ptr<Requestor> reqor;
+  {
+    std::lock_guard<std::mutex> guard(_m);
+    bool has = _rs.count(id);
+    if (!has) {
+      throw std::invalid_argument("Session not found");
+    }
+    reqor = _rs[id];
+  }
+
+  if (!reqor->ready()) {
+    throw std::invalid_argument("Session not ready.");
+  }
+  // as soon as we are ready, the reqor can be read concurrently
+
+  aw.params["Content-Encoding"] = "identity";
+  aw.params["Content-Type"] = "application/json";
+  aw.params["Content-Disposition"] = "attachment;filename:\"export.json\"";
+  aw.params["Server"] = "qlever-petrimaps";
+
+  // we do not set the Content-Length header here, but serve until
+  // we are done. In particular, we do not need to send our data in chunks, as
+  // specified by https://www.rfc-editor.org/rfc/rfc7230#section-3.3.3
+  // point 7
+
+  std::stringstream ss;
+  ss << "HTTP/1.1 200 OK" << aw.status << "\r\n";
+  for (const auto& kv : aw.params)
+    ss << kv.first << ": " << kv.second << "\r\n";
+
+  ss << "\r\n";
+  ss << "{\"type\":\"FeatureCollection\",\"features\":[";
+
+  std::string buff = ss.str();
+
+  size_t writes = 0;
+
+  while (writes != buff.size()) {
+    int64_t out =
+        send(sock, buff.c_str() + writes, buff.size() - writes, MSG_NOSIGNAL);
+    if (out < 0) {
+      if (errno == EWOULDBLOCK || errno == EAGAIN || errno == EINTR) continue;
+      throw std::runtime_error("Failed to write to socket");
+    }
+    writes += out;
+  }
+
+  bool first = false;
+  size_t rowId = 0;
+
+  reqor->requestRows(
+      [sock, &first, &rowId, reqor, this](
+          std::vector<std::vector<std::pair<std::string, std::string>>> rows) {
+        std::stringstream ss;
+        ss << std::setprecision(10);
+        util::json::Val attrs;
+        for (size_t i = 0; i < rows.size(); i++) {
+          auto& row = rows[i];
+          ID_TYPE objectId = reqor->getObjectIdFromRowId(rowId);
+          auto res = reqor->getGeom(objectId, 0);
+
+          for (size_t j = 0; j < row.size(); j++) {
+            attrs.dict[row[j].first] = row[j].second;
+          }
+
+          GeoJsonOutput geoJsonOut(ss, true);
+          if (first) ss << ",";
+          processGeoJsonOutput(geoJsonOut, res, attrs);
+          first = true;
+          ss << "\n";
+
+          rowId++;
+        }
+
+        std::string buff = ss.str();
+
+        size_t writes = 0;
+
+        while (writes != buff.size()) {
+          int64_t out = send(sock, buff.c_str() + writes, buff.size() - writes,
+                             MSG_NOSIGNAL);
+          if (out < 0) {
+            if (errno == EWOULDBLOCK || errno == EAGAIN || errno == EINTR)
+              continue;
+            throw std::runtime_error("Failed to write to socket");
+          }
+          writes += out;
+        }
+      });
+
+  buff = "]}";
+  writes = 0;
+
+  while (writes != buff.size()) {
+    int64_t out =
+        send(sock, buff.c_str() + writes, buff.size() - writes, MSG_NOSIGNAL);
+    if (out < 0) {
+      if (errno == EWOULDBLOCK || errno == EAGAIN || errno == EINTR) continue;
+      throw std::runtime_error("Failed to write to socket");
+    }
+    writes += out;
+  }
+
+  aw.raw = true;
+  return aw;
+}
+
+// _____________________________________________________________________________
+util::http::Answer Server::handleLoadStatusReq(const Params& pars) const {
+  if (pars.count("source") == 0 || pars.find("source")->second.empty())
+    throw std::invalid_argument("No source (?source=) specified.");
+  std::string source = pars.find("source")->second;
+
+  // LOG(INFO) << "[SERVER] LOAD STATUS: Source is: " << source;
+
+  double loadStatusPercent;
+  int loadStatusStage;
+  size_t totalProgress;
+  size_t currentProgress;
+  if (_caches.count(source) == 1) {
+    std::shared_ptr<GeomCache> cache = _caches[source];
+    loadStatusPercent = cache->getLoadStatusPercentTotal();
+    loadStatusStage = cache->getLoadStatusStage();
+    totalProgress = cache->getTotalProgress();
+    currentProgress = cache->getCurrentProgress();
+  } else {
+    LOG(INFO) << "[SERVER] LOAD STATUS: Cache does not exist yet.";
+
+    loadStatusPercent = 0.0;
+    loadStatusStage = 1;
+    totalProgress = 0;
+    currentProgress = 0;
+  }
+
+  std::stringstream json;
+  json << "{\"percent\": " << loadStatusPercent
+       << ", \"stage\": " << loadStatusStage
+       << ", \"totalProgress\": " << totalProgress
+       << ", \"currentProgress\": " << currentProgress << "}";
+  util::http::Answer ans = util::http::Answer("200 OK", json.str());
+
+  return ans;
 }
 
 // _____________________________________________________________________________
@@ -526,392 +1143,6 @@ util::http::Answer Server::handleHeatMapReq(const Params& pars,
 }
 
 // _____________________________________________________________________________
-util::http::Answer Server::handleGeoJSONReq(const Params& pars) const {
-  if (pars.count("id") == 0 || pars.find("id")->second.empty())
-    throw std::invalid_argument("No session id (?id=) specified.");
-  auto id = pars.find("id")->second;
-
-  if (pars.count("rad") == 0 || pars.find("rad")->second.empty())
-    throw std::invalid_argument("No rad (?rad=) specified.");
-  auto rad = std::atof(pars.find("rad")->second.c_str());
-
-  if (pars.count("gid") == 0 || pars.find("gid")->second.empty())
-    throw std::invalid_argument("No geom id (?gid=) specified.");
-  auto gid = std::atoi(pars.find("gid")->second.c_str());
-
-  bool noExport = pars.count("export") == 0 ||
-                  pars.find("export")->second.empty() ||
-                  !std::atoi(pars.find("export")->second.c_str());
-
-  LOG(INFO) << "[SERVER] GeoJSON request for " << gid;
-
-  std::shared_ptr<Requestor> reqor;
-  {
-    std::lock_guard<std::mutex> guard(_m);
-    bool has = _rs.count(id);
-    if (!has) {
-      throw std::invalid_argument("Session not found");
-    }
-    reqor = _rs[id];
-  }
-
-  if (!reqor->ready()) {
-    throw std::invalid_argument("Session not ready.");
-  }
-  // as soon as we are ready, the reqor can be read concurrently
-
-  auto res = reqor->getGeom(gid, rad);
-
-  util::json::Val attrs;
-  if (!noExport) {
-    for (auto col : reqor->requestRow(reqor->getObjects()[gid].second)) {
-      attrs.dict[col.first] = col.second;
-    }
-  }
-
-  std::stringstream json;
-  GeoJsonOutput out(json);
-  processGeoJsonOutput(out, res, attrs);
-
-  auto answ = util::http::Answer("200 OK", json.str());
-  answ.params["Content-Type"] = "application/json; charset=utf-8";
-  if (!noExport) {
-    answ.params["Content-Disposition"] = "attachment;filename:\"export.json\"";
-  }
-
-  return answ;
-}
-
-// _____________________________________________________________________________
-util::http::Answer Server::handlePosReq(const Params& pars) const {
-  if (pars.count("x") == 0 || pars.find("x")->second.empty())
-    throw std::invalid_argument("No x coord (?x=) specified.");
-  float x = std::atof(pars.find("x")->second.c_str());
-
-  if (pars.count("y") == 0 || pars.find("y")->second.empty())
-    throw std::invalid_argument("No y coord (?y=) specified.");
-  float y = std::atof(pars.find("y")->second.c_str());
-
-  if (pars.count("id") == 0 || pars.find("id")->second.empty())
-    throw std::invalid_argument("No session id (?id=) specified.");
-  auto id = pars.find("id")->second;
-
-  if (pars.count("rad") == 0 || pars.find("rad")->second.empty())
-    throw std::invalid_argument("No rad (?rad=) specified.");
-  auto rad = std::atof(pars.find("rad")->second.c_str());
-
-  if (pars.count("width") == 0 || pars.find("width")->second.empty())
-    throw std::invalid_argument("No width (?width=) specified.");
-  if (pars.count("height") == 0 || pars.find("height")->second.empty())
-    throw std::invalid_argument("No height (?height=) specified.");
-
-  if (pars.count("bbox") == 0 || pars.find("bbox")->second.empty())
-    throw std::invalid_argument("No bbox specified.");
-  auto box = util::split(pars.find("bbox")->second, ',');
-
-  MapStyle style = HEATMAP;
-  if (pars.count("styles") != 0 && !pars.find("styles")->second.empty()) {
-    if (pars.find("styles")->second == "objects") style = OBJECTS;
-  }
-
-  if (box.size() != 4) throw std::invalid_argument("Invalid request.");
-
-  double x1 = std::atof(box[0].c_str());
-  double y1 = std::atof(box[1].c_str());
-  double x2 = std::atof(box[2].c_str());
-  double y2 = std::atof(box[3].c_str());
-  double mercH = fabs(y2 - y1);
-
-  auto fbbox = FBox({x1, y1}, {x2, y2});
-
-  int h = atoi(pars.find("height")->second.c_str());
-
-  double reso = mercH / h;
-
-  // res of -1 means dont render clusters
-  if (style == HEATMAP || reso >= THRESHOLD) reso = -1;
-
-  LOG(INFO) << "[SERVER] Click at " << x << ", " << y;
-
-  std::shared_ptr<Requestor> reqor;
-  {
-    std::lock_guard<std::mutex> guard(_m);
-    bool has = _rs.count(id);
-    if (!has) {
-      throw std::invalid_argument("Session not found");
-    }
-    reqor = _rs[id];
-  }
-
-  if (!reqor->ready()) {
-    throw std::invalid_argument("Session not ready.");
-  }
-  // as soon as we are ready, the reqor can be read concurrently
-
-  auto res = reqor->getNearest({x, y}, rad, reso, fbbox);
-
-  std::stringstream json;
-  json << "[";
-  if (res.has) {
-    json << "{\"id\" :" << res.id;
-    json << ",\"attrs\" : [";
-
-    bool first = true;
-
-    for (const auto& kv : res.cols) {
-      if (!first) {
-        json << ",";
-      }
-      json << "[\"" << util::jsonStringEscape(kv.first) << "\",\""
-           << util::jsonStringEscape(kv.second) << "\"]";
-
-      first = false;
-    }
-
-    auto ll =
-        webMercToLatLng<float>(res.pos.front().getX(), res.pos.front().getY());
-    json << "]";
-    json << std::setprecision(10) << ",\"ll\":{\"lat\" : " << ll.getY()
-         << ",\"lng\":" << ll.getX() << "}";
-
-    // Why does this block of code not work?:
-    /*json << ",\"geom\":";
-    GeoJsonOutput out(json);
-    if (res.poly.size()) {
-      out.printLatLng(res.poly, {});
-    } else if (res.line.size()) {
-      out.printLatLng(res.line, {});
-    } else {
-      out.printLatLng(res.pos, {});
-    }*/
-
-    // Or:
-    // processGeoJsonOutput(out, res, {});
-
-    json << ",\"geom\":";
-    if (res.poly.size()) {
-      GeoJsonOutput out(json);
-      if (res.poly.size() == 1) {
-        out.printLatLng(res.poly[0], {});
-      } else {
-        out.printLatLng(res.poly, {});
-      }
-    } else if (res.line.size()) {
-      GeoJsonOutput out(json);
-      if (res.line.size() == 1) {
-        out.printLatLng(res.line[0], {});
-      } else {
-        out.printLatLng(res.line, {});
-      }
-    } else {
-      GeoJsonOutput out(json);
-      if (res.pos.size() == 1) {
-        out.printLatLng(res.pos[0], {});
-      } else {
-        out.printLatLng(res.pos, {});
-      }
-    }
-
-    json << "}";
-  }
-  json << "]";
-
-  auto answ = util::http::Answer("200 OK", json.str());
-  answ.params["Content-Type"] = "application/json; charset=utf-8";
-
-  return answ;
-}
-
-// _____________________________________________________________________________
-util::http::Answer Server::handleClearSessReq(const Params& pars) const {
-  std::string id;
-  if (pars.count("id") != 0 && !pars.find("id")->second.empty())
-    id = pars.find("id")->second;
-
-  {
-    std::lock_guard<std::mutex> guard(_m);
-    if (id.size())
-      clearSession(id);
-    else
-      clearSessions();
-  }
-
-  auto answ = util::http::Answer("200 OK", "{}");
-  answ.params["Content-Type"] = "application/json; charset=utf-8";
-
-  return answ;
-}
-
-// _____________________________________________________________________________
-util::http::Answer Server::handleLoadReq(const Params& pars) const {
-  if (pars.count("backend") == 0 || pars.find("backend")->second.empty())
-    throw std::invalid_argument("No backend (?backend=) specified.");
-  auto backend = pars.find("backend")->second;
-
-  LOG(INFO) << "[SERVER] Queried backend is " << backend;
-
-  createCache(backend, GeomCache::SourceType::backend);
-  loadCache(backend);
-
-  auto answ = util::http::Answer("200 OK", "{}");
-  answ.params["Content-Type"] = "application/json; charset=utf-8";
-  return answ;
-}
-
-// _____________________________________________________________________________
-util::http::Answer Server::handleQueryReq(const Params& pars) const {
-  if (pars.count("query") == 0 || pars.find("query")->second.empty())
-    throw std::invalid_argument("No query (?q=) specified.");
-  if (pars.count("backend") == 0 || pars.find("backend")->second.empty())
-    throw std::invalid_argument("No backend (?backend=) specified.");
-  auto query = pars.find("query")->second;
-  auto backend = pars.find("backend")->second;
-
-  LOG(INFO) << "[SERVER] Queried backend is " << backend;
-  LOG(INFO) << "[SERVER] Query is:\n" << query;
-
-  createCache(backend, GeomCache::SourceType::backend);
-  std::string indexHash = loadCache(backend);
-
-  std::string requestId = backend + "$" + indexHash + "$" + query;
-  std::shared_ptr<SPARQLRequestor> reqor;
-  std::string sessionId;
-  {
-    std::lock_guard<std::mutex> guard(_m);
-    if (_requestCache.count(requestId)) {
-      sessionId = _requestCache[requestId];
-      reqor = std::dynamic_pointer_cast<SPARQLRequestor>(_rs[sessionId]);
-    } else {
-      reqor = std::shared_ptr<SPARQLRequestor>(new SPARQLRequestor(
-          std::dynamic_pointer_cast<SPARQLCache>(_caches[backend]),
-          _maxMemory));
-      sessionId = getSessionId();
-
-      _rs[sessionId] = std::dynamic_pointer_cast<Requestor>(reqor);
-      _requestCache[requestId] = sessionId;
-    }
-  }
-
-  try {
-    reqor->request(query);
-  } catch (OutOfMemoryError& ex) {
-    LOG(ERROR) << ex.what() << backend;
-
-    // delete cache, is now in unready state
-    {
-      std::lock_guard<std::mutex> guard(_m);
-      clearSession(sessionId);
-    }
-
-    auto answ = util::http::Answer("406 Not Acceptable", ex.what());
-    answ.params["Content-Type"] = "application/json; charset=utf-8";
-    return answ;
-  }
-
-  reqor->getPointGrid().getBBox();
-  auto bbox = reqor->getPointGrid().getBBox();
-  bbox = extendBox(reqor->getLineGrid().getBBox(), bbox);
-
-  size_t numObjs = reqor->getNumObjects();
-
-  auto ll = bbox.getLowerLeft();
-  auto ur = bbox.getUpperRight();
-
-  double llX = ll.getX();
-  double llY = ll.getY();
-  double urX = ur.getX();
-  double urY = ur.getY();
-
-  std::stringstream json;
-  json << std::fixed << "{\"qid\" : \"" << sessionId << "\",\"bounds\":[["
-       << llX << "," << llY << "],[" << urX << "," << urY << "]]"
-       << ",\"numobjects\":" << numObjs << "}";
-
-  auto answ = util::http::Answer("200 OK", json.str());
-  answ.params["Content-Type"] = "application/json; charset=utf-8";
-
-  return answ;
-}
-
-util::http::Answer Server::handleGeoJsonHashReq(const Params& pars) const {
-  std::string content = pars.find("geoJsonFile")->second;
-
-  // Create MD5-Hash of content
-  std::string md5_hash = md5(content);
-  createCache(md5_hash, GeomCache::SourceType::geoJSON);
-  std::shared_ptr<GeoJSONCache> cache =
-      std::dynamic_pointer_cast<GeoJSONCache>(_caches[md5_hash]);
-  cache->setContent(content);
-
-  auto answ = util::http::Answer("200 OK", md5_hash);
-  answ.params["Content-Type"] = "application/json; charset=utf-8";
-
-  return answ;
-}
-
-util::http::Answer Server::handleGeoJsonFileReq(const Params& pars) const {
-  std::string md5_hash = pars.find("geoJsonHash")->second;
-
-  std::shared_ptr<GeoJSONCache> cache =
-      std::dynamic_pointer_cast<GeoJSONCache>(_caches[md5_hash]);
-  cache->load();
-
-  std::string requestId = md5_hash;
-  std::shared_ptr<GeoJSONRequestor> reqor;
-  std::string sessionId;
-  {
-    std::lock_guard<std::mutex> guard(_m);
-    if (_requestCache.count(requestId)) {
-      sessionId = _requestCache[requestId];
-      reqor = std::dynamic_pointer_cast<GeoJSONRequestor>(_rs[sessionId]);
-    } else {
-      sessionId = getSessionId();
-      reqor = std::shared_ptr<GeoJSONRequestor>(
-          new GeoJSONRequestor(cache, _maxMemory));
-
-      _rs[sessionId] = std::dynamic_pointer_cast<Requestor>(reqor);
-      _requestCache[requestId] = sessionId;
-    }
-  }
-
-  try {
-    reqor->request();
-  } catch (OutOfMemoryError& ex) {
-    LOG(ERROR) << ex.what();
-
-    // delete cache, is now in unready state
-    {
-      std::lock_guard<std::mutex> guard(_m);
-      clearSession(sessionId);
-    }
-
-    auto answ = util::http::Answer("406 Not Acceptable", ex.what());
-    answ.params["Content-Type"] = "application/json; charset=utf-8";
-    return answ;
-  }
-
-  util::geo::FBox bbox = reqor->getPointGrid().getBBox();
-  bbox = extendBox(reqor->getLineGrid().getBBox(), bbox);
-  util::geo::FPoint ll = bbox.getLowerLeft();
-  util::geo::FPoint ur = bbox.getUpperRight();
-  float llX = ll.getX();
-  float llY = ll.getY();
-  float urX = ur.getX();
-  float urY = ur.getY();
-  size_t numObjs = reqor->getNumObjects();
-
-  std::stringstream json;
-  json << std::fixed << "{\"qid\" : \"" << sessionId << "\",\"bounds\":[["
-       << llX << "," << llY << "],[" << urX << "," << urY << "]]"
-       << ",\"numobjects\":" << numObjs << "}";
-
-  auto answ = util::http::Answer("200 OK", json.str());
-  answ.params["Content-Type"] = "application/json; charset=utf-8";
-
-  return answ;
-}
-
-// _____________________________________________________________________________
 void Server::pngWriteRowCb(png_structp, png_uint_32 row, int) {
   _curRow = row;
 }
@@ -1010,147 +1241,6 @@ void Server::clearOldSessions() const {
       clearSession(id);
     }
   }
-}
-
-// _____________________________________________________________________________
-util::http::Answer Server::handleExportReq(const Params& pars, int sock) const {
-  // ignore SIGPIPE
-  signal(SIGPIPE, SIG_IGN);
-
-  auto aw = util::http::Answer("200 OK", "");
-
-  if (pars.count("id") == 0 || pars.find("id")->second.empty())
-    throw std::invalid_argument("No session id (?id=) specified.");
-  auto id = pars.find("id")->second;
-
-  std::shared_ptr<Requestor> reqor;
-  {
-    std::lock_guard<std::mutex> guard(_m);
-    bool has = _rs.count(id);
-    if (!has) {
-      throw std::invalid_argument("Session not found");
-    }
-    reqor = _rs[id];
-  }
-
-  if (!reqor->ready()) {
-    throw std::invalid_argument("Session not ready.");
-  }
-  // as soon as we are ready, the reqor can be read concurrently
-
-  aw.params["Content-Encoding"] = "identity";
-  aw.params["Content-Type"] = "application/json";
-  aw.params["Content-Disposition"] = "attachment;filename:\"export.json\"";
-  aw.params["Server"] = "qlever-petrimaps";
-
-  // we do not set the Content-Length header here, but serve until
-  // we are done. In particular, we do not need to send our data in chunks, as
-  // specified by https://www.rfc-editor.org/rfc/rfc7230#section-3.3.3
-  // point 7
-
-  std::stringstream ss;
-  ss << "HTTP/1.1 200 OK" << aw.status << "\r\n";
-  for (const auto& kv : aw.params)
-    ss << kv.first << ": " << kv.second << "\r\n";
-
-  ss << "\r\n";
-  ss << "{\"type\":\"FeatureCollection\",\"features\":[";
-
-  std::string buff = ss.str();
-
-  size_t writes = 0;
-
-  while (writes != buff.size()) {
-    int64_t out =
-        send(sock, buff.c_str() + writes, buff.size() - writes, MSG_NOSIGNAL);
-    if (out < 0) {
-      if (errno == EWOULDBLOCK || errno == EAGAIN || errno == EINTR) continue;
-      throw std::runtime_error("Failed to write to socket");
-    }
-    writes += out;
-  }
-
-  bool first = false;
-  size_t rowId = 0;
-
-  reqor->requestRows(
-      [sock, &first, &rowId, reqor, this](
-          std::vector<std::vector<std::pair<std::string, std::string>>> rows) {
-        std::stringstream ss;
-        ss << std::setprecision(10);
-        util::json::Val attrs;
-        for (size_t i = 0; i < rows.size(); i++) {
-          auto& row = rows[i];
-          ID_TYPE objectId = reqor->getObjectIdFromRowId(rowId);
-          auto res = reqor->getGeom(objectId, 0);
-
-          for (size_t j = 0; j < row.size(); j++) {
-            attrs.dict[row[j].first] = row[j].second;
-          }
-
-          GeoJsonOutput geoJsonOut(ss, true);
-          if (first) ss << ",";
-          processGeoJsonOutput(geoJsonOut, res, attrs);
-          first = true;
-          ss << "\n";
-
-          rowId++;
-        }
-
-        std::string buff = ss.str();
-
-        size_t writes = 0;
-
-        while (writes != buff.size()) {
-          int64_t out = send(sock, buff.c_str() + writes, buff.size() - writes,
-                             MSG_NOSIGNAL);
-          if (out < 0) {
-            if (errno == EWOULDBLOCK || errno == EAGAIN || errno == EINTR)
-              continue;
-            throw std::runtime_error("Failed to write to socket");
-          }
-          writes += out;
-        }
-      });
-
-  buff = "]}";
-  writes = 0;
-
-  while (writes != buff.size()) {
-    int64_t out =
-        send(sock, buff.c_str() + writes, buff.size() - writes, MSG_NOSIGNAL);
-    if (out < 0) {
-      if (errno == EWOULDBLOCK || errno == EAGAIN || errno == EINTR) continue;
-      throw std::runtime_error("Failed to write to socket");
-    }
-    writes += out;
-  }
-
-  aw.raw = true;
-  return aw;
-}
-
-// _____________________________________________________________________________
-util::http::Answer Server::handleLoadStatusReq(const Params& pars) const {
-  if (pars.count("source") == 0 || pars.find("source")->second.empty())
-    throw std::invalid_argument("No source (?source=) specified.");
-  auto source = pars.find("source")->second;
-  createCache(source, GeomCache::SourceType::backend);
-  std::shared_ptr<GeomCache> cache = _caches[source];
-
-  double loadStatusPercent = cache->getLoadStatusPercent(true);
-  int loadStatusStage = cache->getLoadStatusStage();
-  size_t totalProgress = cache->getTotalProgress();
-  size_t currentProgress = cache->getCurrentProgress();
-
-  std::stringstream json;
-  json << "{\"percent\": " << loadStatusPercent
-       << ", \"stage\": " << loadStatusStage
-       << ", \"totalProgress\": " << totalProgress
-       << ", \"currentProgress\": " << currentProgress << "}";
-  util::http::Answer ans = util::http::Answer("200 OK", json.str());
-
-  return ans;
 }
 
 // _____________________________________________________________________________
@@ -1258,8 +1348,7 @@ void Server::processGeoJsonOutput(GeoJsonOutput out, const ResObj res,
 }
 
 // _____________________________________________________________________________
-void Server::createCache(const std::string& source,
-                         const GeomCache::SourceType srcType) const {
+std::shared_ptr<petrimaps::GeomCache> Server::createCache(const std::string& source, const GeomCache::SourceType srcType) const {
   std::shared_ptr<GeomCache> cache;
   {
     std::lock_guard<std::mutex> guard(_m);
@@ -1270,6 +1359,9 @@ void Server::createCache(const std::string& source,
         case GeomCache::SourceType::backend:
           cache = std::shared_ptr<SPARQLCache>(new SPARQLCache(source));
           break;
+        case GeomCache::SourceType::SQL:
+          cache = std::shared_ptr<SQLCache>(new SQLCache());
+          break;
         case GeomCache::SourceType::geoJSON:
           cache = std::shared_ptr<GeoJSONCache>(new GeoJSONCache());
           break;
@@ -1277,19 +1369,18 @@ void Server::createCache(const std::string& source,
       _caches[source] = cache;
     }
   }
+
+  return cache;
 }
 
 // _____________________________________________________________________________
-std::string Server::loadCache(const std::string& backend) const {
-  std::shared_ptr<SPARQLCache> cache =
-      std::dynamic_pointer_cast<SPARQLCache>(_caches[backend]);
-
+void Server::loadCache(std::shared_ptr<GeomCache> cache, const std::string& source) const {
   try {
-    return cache->load(_cacheDir);
+    cache->load(_cacheDir);
   } catch (...) {
     std::lock_guard<std::mutex> guard(_m);
 
-    auto it = _caches.find(backend);
+    auto it = _caches.find(source);
     if (it != _caches.end()) _caches.erase(it);
 
     throw;

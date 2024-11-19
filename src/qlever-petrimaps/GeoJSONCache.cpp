@@ -10,6 +10,27 @@ using petrimaps::GeoJSONCache;
 using json = nlohmann::json;
 
 // _____________________________________________________________________________
+double GeoJSONCache::getLoadStatusPercentTotal() {
+  if (_totalSize == 0) {
+    return 0.0;
+  }
+
+  double totalPercent = 0.0;
+  switch (_loadStatusStage) {
+    case _LoadStatusStages::Parse:
+      totalPercent += _curRow / static_cast<double>(_totalSize) * 100.0;
+      break;
+  }
+
+  return totalPercent;
+}
+
+// _____________________________________________________________________________
+int GeoJSONCache::getLoadStatusStage() {
+  return _loadStatusStage;
+}
+
+// _____________________________________________________________________________
 std::vector<std::pair<ID_TYPE, ID_TYPE>> GeoJSONCache::getRelObjects() const {
   // Used for GeoJSON, returns all objects as vector<pair<geomID, Row>>
   // geomID starts from 0 ascending, Row = geomID
@@ -38,68 +59,7 @@ std::vector<std::pair<ID_TYPE, ID_TYPE>> GeoJSONCache::getRelObjects() const {
 }
 
 // _____________________________________________________________________________
-void GeoJSONCache::insertLine(const util::geo::DLine& l, bool isArea) {
-  const auto& bbox = util::geo::getBoundingBox(l);
-  int16_t mainX = (bbox.getLowerLeft().getX() * 10.0) / M_COORD_GRANULARITY;
-  int16_t mainY = (bbox.getLowerLeft().getY() * 10.0) / M_COORD_GRANULARITY;
-
-  if (mainX != 0 || mainY != 0) {
-    util::geo::Point<int16_t> p{mCoord(mainX), mCoord(mainY)};
-    _linePoints.push_back(p);
-  }
-
-  // add bounding box lower left
-  int16_t minorXLoc =
-      (bbox.getLowerLeft().getX() * 10.0) - mainX * M_COORD_GRANULARITY;
-  int16_t minorYLoc =
-      (bbox.getLowerLeft().getY() * 10.0) - mainY * M_COORD_GRANULARITY;
-  util::geo::Point<int16_t> p{minorXLoc, minorYLoc};
-  _linePoints.push_back(p);
-
-  // add bounding box upper left
-  int16_t mainXLoc = (bbox.getUpperRight().getX() * 10.0) / M_COORD_GRANULARITY;
-  int16_t mainYLoc = (bbox.getUpperRight().getY() * 10.0) / M_COORD_GRANULARITY;
-  minorXLoc =
-      (bbox.getUpperRight().getX() * 10.0) - mainXLoc * M_COORD_GRANULARITY;
-  minorYLoc =
-      (bbox.getUpperRight().getY() * 10.0) - mainYLoc * M_COORD_GRANULARITY;
-  if (mainXLoc != mainX || mainYLoc != mainY) {
-    mainX = mainXLoc;
-    mainY = mainYLoc;
-    util::geo::Point<int16_t> p{mCoord(mainX), mCoord(mainY)};
-    _linePoints.push_back(p);
-  }
-  p = util::geo::Point<int16_t>{minorXLoc, minorYLoc};
-  _linePoints.push_back(p);
-
-  // add line points
-  for (const auto& p : l) {
-    mainXLoc = (p.getX() * 10.0) / M_COORD_GRANULARITY;
-    mainYLoc = (p.getY() * 10.0) / M_COORD_GRANULARITY;
-
-    if (mainXLoc != mainX || mainYLoc != mainY) {
-      mainX = mainXLoc;
-      mainY = mainYLoc;
-      util::geo::Point<int16_t> p{mCoord(mainX), mCoord(mainY)};
-      _linePoints.push_back(p);
-    }
-
-    int16_t minorXLoc = (p.getX() * 10.0) - mainXLoc * M_COORD_GRANULARITY;
-    int16_t minorYLoc = (p.getY() * 10.0) - mainYLoc * M_COORD_GRANULARITY;
-    util::geo::Point<int16_t> pp{minorXLoc, minorYLoc};
-    _linePoints.push_back(pp);
-  }
-
-  // if we have an area, we end in a major coord (which is not possible for
-  // other types)
-  if (isArea) {
-    util::geo::Point<int16_t> p{mCoord(0), mCoord(0)};
-    _linePoints.push_back(p);
-  }
-}
-
-// _____________________________________________________________________________
-void GeoJSONCache::load() {
+void GeoJSONCache::load(const std::string& cacheDir) {
   _loadStatusStage = _LoadStatusStages::Parse;
 
   json res = json::parse(_content);
@@ -142,12 +102,10 @@ void GeoJSONCache::load() {
     auto coords = geom["coordinates"];
     auto properties = feature["properties"];
 
-    LOG(INFO) << type;
-
     // PRIMITIVES
     // Point
     if (type == "Point") {
-      auto point = latLngToWebMerc(FPoint(coords[0], coords[1]));
+      FPoint point = latLngToWebMerc(FPoint(coords[0], coords[1]));
       if (!pointValid(point)) {
         LOG(INFO) << "[GeomCache] Invalid point found. Skipping...";
         continue;
@@ -164,7 +122,7 @@ void GeoJSONCache::load() {
       line.reserve(coords.size());
 
       for (std::vector<float> coord : coords) {
-        auto point = latLngToWebMerc(DPoint(coord[0], coord[1]));
+        DPoint point = latLngToWebMerc(DPoint(coord[0], coord[1]));
         if (!pointValid(point)) {
           LOG(INFO) << "[GeomCache] Invalid point found. Skipping...";
           continue;
@@ -188,7 +146,7 @@ void GeoJSONCache::load() {
         line.reserve(args.size());
 
         for (std::vector<float> coord : args) {
-          auto point = latLngToWebMerc(DPoint(coord[0], coord[1]));
+          DPoint point = latLngToWebMerc(DPoint(coord[0], coord[1]));
           if (!pointValid(point)) {
             LOG(INFO) << "[GeomCache] Invalid point found. Skipping...";
             continue;
@@ -212,7 +170,7 @@ void GeoJSONCache::load() {
     } else if (type == "MultiPoint") {
       for (size_t i = 0; i < coords.size(); i++) {
         std::vector<float> coord = coords[i];
-        auto point = latLngToWebMerc(FPoint(coord[0], coord[1]));
+        FPoint point = latLngToWebMerc(FPoint(coord[0], coord[1]));
         if (!pointValid(point)) {
           LOG(INFO) << "[GeomCache] Invalid point found. Skipping...";
           continue;
@@ -233,7 +191,7 @@ void GeoJSONCache::load() {
         line.reserve(args.size());
 
         for (std::vector<float> coord : args) {
-          auto point = latLngToWebMerc(DPoint(coord[0], coord[1]));
+          DPoint point = latLngToWebMerc(DPoint(coord[0], coord[1]));
           if (!pointValid(point)) {
             LOG(INFO) << "[GeomCache] Invalid point found. Skipping...";
             continue;
@@ -260,7 +218,7 @@ void GeoJSONCache::load() {
           line.reserve(args2.size());
 
           for (std::vector<float> coord : args2) {
-            auto point = latLngToWebMerc(DPoint(coord[0], coord[1]));
+            DPoint point = latLngToWebMerc(DPoint(coord[0], coord[1]));
             if (!pointValid(point)) {
               LOG(INFO) << "[GeomCache] Invalid point found. Skipping...";
               continue;

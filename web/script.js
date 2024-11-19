@@ -67,10 +67,11 @@ function openPopup(data) {
             if (row[i].includes("wkt") || variable == "?image" || variable == "?flag" || variable.endsWith("_image")) return;
 
             // Take the variable name as one table column and the result value as
-            // another. Reformat a bit, so that it looks nice in an HTML table. and
-            // the result value as another. Reformat a bit, so that it looks nice in
-            // an HTML table.
-            let key = variable.substring(1);
+            // another. Reformat a bit, so that it looks nice in an HTML table.
+            let key = variable;
+            if (key.startsWith("?")) {
+                key = key.substring(1);
+            }
             if (row[i] == null) { row[i] = "---" }
             let value = row[i].replace(/\\([()])/g, "$1")
                         .replace(/<((.*)\/(.*))>/,
@@ -99,8 +100,6 @@ function openPopup(data) {
                 curGeojson.remove();
                 curGeojsonId = -1;
             });
-
-        console.log(data[0].geom);
 
         curGeojson = getGeoJsonLayer(data[0].geom);
         curGeojsonId = data[0].id;
@@ -208,10 +207,6 @@ function updateMap() {
 	objectsLayer.on('error', function() {showError(genError);});
     autoLayerHeatmap.on('error', function() {showError(genError);});
     autoLayerObjects.on('error', function() {showError(genError);});
-	//heatmapLayer.on('load', function() {console.log("Finished loading map!");});
-	//objectsLayer.on('load', function() {console.log("Finished loading map!");});
-    //autoLayerHeatmap.on('load', function() {console.log("Finished loading map!");});
-	//autoLayerObjects.on('load', function() {console.log("Finished loading map!");});
 
     layerControl.addBaseLayer(heatmapLayer, "Heatmap");
 	layerControl.addBaseLayer(objectsLayer, "Objects");
@@ -247,36 +242,105 @@ function loadMap(id, bounds, numObjects) {
     document.getElementById("options-ex").style.display = "inline-block";
 }
 
-function updateLoad(stage, percent, totalProgress, currentProgress) {
-    const infoElem = document.getElementById("msg-info");
-    const infoHeadingElem = document.getElementById("msg-info-heading");
-    const infoDescElem = document.getElementById("msg-info-desc");
-    const stageElem = document.getElementById("load-stage");
+function updateLoad(type, stage, percent, totalProgress, currentProgress) {
+    switch (type) {
+        case "SPARQL":
+            updateLoadSPARQL(stage, totalProgress, currentProgress);
+            break;
+        case "GeoJson":
+            updateLoadGeoJson(stage, totalProgress, currentProgress);
+            break;
+        case "SQL":
+            updateLoadSQL(stage, totalProgress, currentProgress);
+    }
+
     const barElem = document.getElementById("load-bar");
     const percentElem = document.getElementById("load-percent");
-    switch (stage) {
-        case 1:
-            infoHeadingElem.innerHTML = "Filling the geometry cache";
-            infoDescElem.innerHTML = "This needs to be done only once for each new version of the dataset and does not have to be repeated for subsequent queries.";
-            stageElem.innerHTML = `Parsing ${currentProgress}/${totalProgress} geometries... (1/2)`;
-            break;
-        case 2:
-            infoHeadingElem.innerHTML = "Filling the geometry cache";
-            infoDescElem.innerHTML = "This needs to be done only once for each new version of the dataset and does not have to be repeated for subsequent queries.";
-            stageElem.innerHTML = `Fetching ${currentProgress}/${totalProgress} geometries... (2/2)`;
-            break;
-        case 3:
-            infoHeadingElem.innerHTML = "Reading cached geometries from disk";
-            infoDescElem.innerHTML = "This needs to be done only once after the server has been started and does not have to be repeated for subsequent queries.";
-            stageElem.innerHTML = `Reading ${currentProgress}/${totalProgress} geometries from disk... (1/1)`;
-            break;
-    }
+    const infoElem = document.getElementById("msg-info");
     barElem.style.width = percent + "%";
     percentElem.innerHTML = percent.toString() + "%";
     infoElem.style.display = "block";
 }
 
-function fetchQuery(query, backend) {
+function updateLoadSPARQL(stage, totalProgress, currentProgress) {
+    const headingElem = document.getElementById("msg-heading");
+    const infoHeadingElem = document.getElementById("msg-info-heading");
+    const infoDescElem = document.getElementById("msg-info-desc");
+    const stageElem = document.getElementById("load-stage");
+    headingElem.innerHTML = "Loading results from QLever";
+    switch (stage) {
+        case 1:
+            // Parse
+            infoHeadingElem.innerHTML = "Filling the geometry cache";
+            infoDescElem.innerHTML = "This needs to be done only once for each new version of the dataset and does not have to be repeated for subsequent queries.";
+            stageElem.innerHTML = `Parsing ${currentProgress}/${totalProgress} geometries... (1/2)`;
+            break;
+        case 2:
+            // ParseIds
+            infoHeadingElem.innerHTML = "Filling the geometry cache";
+            infoDescElem.innerHTML = "This needs to be done only once for each new version of the dataset and does not have to be repeated for subsequent queries.";
+            stageElem.innerHTML = `Fetching ${currentProgress}/${totalProgress} geometries... (2/2)`;
+            break;
+        case 3:
+            // FromFile
+            infoHeadingElem.innerHTML = "Reading cached geometries from disk";
+            infoDescElem.innerHTML = "This needs to be done only once after the server has been started and does not have to be repeated for subsequent queries.";
+            stageElem.innerHTML = `Reading ${currentProgress}/${totalProgress} geometries from disk... (1/1)`;
+            break;
+    }
+}
+
+function updateLoadGeoJson(stage, totalProgress, currentProgress) {
+    const headingElem = document.getElementById("msg-heading");
+    const infoHeadingElem = document.getElementById("msg-info-heading");
+    const infoDescElem = document.getElementById("msg-info-desc");
+    const stageElem = document.getElementById("load-stage");
+    headingElem.innerHTML = "Loading results from a GeoJson file";
+    switch (stage) {
+        case 1:
+            // Parse
+            infoHeadingElem.innerHTML = "Filling the geometry cache";
+            infoDescElem.innerHTML = "This needs to be done only once for each new version of the dataset and does not have to be repeated for subsequent queries.";
+            stageElem.innerHTML = `Parsing ${currentProgress}/${totalProgress} geometries... (1/1)`;
+            break;
+    }
+}
+
+function updateLoadSQL(stage, totalProgress, currentProgress) {
+    const headingElem = document.getElementById("msg-heading");
+    const infoHeadingElem = document.getElementById("msg-info-heading");
+    const infoDescElem = document.getElementById("msg-info-desc");
+    const stageElem = document.getElementById("load-stage");
+    headingElem.innerHTML = "Loading results from PostgreSQL";
+    switch (stage) {
+        case 1:
+            // GeomCountQuery
+            infoHeadingElem.innerHTML = "Processing Geometry Count Query";
+            infoDescElem.innerHTML = "This needs to be done only once for each new version of the dataset and does not have to be repeated for subsequent queries.";
+            stageElem.innerHTML = `(1/2)`;
+            break;
+        case 2:
+            // FinalQuery
+            infoHeadingElem.innerHTML = "Processing Final Query";
+            infoDescElem.innerHTML = "This needs to be done only once for each new version of the dataset and does not have to be repeated for subsequent queries.";
+            stageElem.innerHTML = `(2/2)`;
+            break;
+        case 3:
+            // Parse
+            infoHeadingElem.innerHTML = "Filling the geometry cache";
+            infoDescElem.innerHTML = "This needs to be done only once for each new version of the dataset and does not have to be repeated for subsequent queries.";
+            stageElem.innerHTML = `Parsing ${currentProgress}/${totalProgress} geometries... (2/2)`;
+            break;
+        case 4:
+            // FromFile
+            infoHeadingElem.innerHTML = "Reading cached geometries from disk";
+            infoDescElem.innerHTML = "This needs to be done only once after the server has been started and does not have to be repeated for subsequent queries.";
+            stageElem.innerHTML = `Reading ${currentProgress}/${totalProgress} geometries from disk... (1/1)`;
+            break;
+    }
+}
+
+function fetchSPARQLQuery(query, backend) {
     const query_encoded = encodeURIComponent(query);
     const backend_encoded = encodeURIComponent(backend);
 
@@ -294,9 +358,16 @@ function fetchQuery(query, backend) {
         a.click();
     }
 
-    const url = "query?query=" + query_encoded + "&backend=" + backend_encoded;
+    const url = "SPARQLquery?SPARQL_query=" + query_encoded + "&SPARQL_backend=" + backend_encoded;
     fetchResults(url);
-    fetchLoadStatusInterval(1000, backend_encoded);
+    fetchLoadStatusInterval(1000, "SPARQL", backend_encoded);
+}
+
+function fetchSQLQuery(query) {
+    const query_encoded = encodeURIComponent(query);
+    const url = "SQLquery?SQL_query=" + query_encoded;
+    fetchResults(url);
+    fetchLoadStatusInterval(1000, "SQL", "SQL");
 }
 
 function fetchGeoJsonHash(content) {
@@ -340,7 +411,7 @@ function fetchGeoJsonFile(md5_hash) {
     document.getElementById("submit-button").disabled = true;
     document.getElementById("msg").style.display = "block";
 
-    fetchLoadStatusInterval(1000, md5_hash);
+    fetchLoadStatusInterval(1000, "GeoJson", md5_hash);
 }
 
 function fetchResults(url) {
@@ -355,25 +426,26 @@ function fetchResults(url) {
     .then(response => response.json())
     .then(data => {
         clearInterval(loadStatusIntervalId);
-        document.getElementById("submit-button").disabled = false;
         loadMap(data["qid"], data["bounds"], data["numobjects"]);
+        document.getElementById("submit-button").disabled = false;
     })
     .catch(error => {
         clearInterval(loadStatusIntervalId);
-        document.getElementById("submit-button").disabled = false;
         showError(error);
+        document.getElementById("submit-button").disabled = false;
     });
 
     document.getElementById("msg").style.display = "block";
 }
 
-function fetchLoadStatusInterval(interval, source) {
-    fetchLoadStatus();
-    loadStatusIntervalId = setInterval(fetchLoadStatus, interval, source);
+function fetchLoadStatusInterval(interval, type, source) {
+    console.log("FETCH LOAD STATUS: ", source);
+    fetchLoadStatus(type, source);
+    loadStatusIntervalId = setInterval(fetchLoadStatus, interval, type, source);
     document.getElementById("load").style.display = "block";
 }
 
-async function fetchLoadStatus(source) {
+async function fetchLoadStatus(type, source) {
     fetch('loadstatus?source=' + source)
     .then(response => {
         if (!response.ok) {
@@ -387,7 +459,7 @@ async function fetchLoadStatus(source) {
         const percent = parseFloat(data["percent"]).toFixed(2);
         const totalProgress = data["totalProgress"];
         const currentProgress = data["currentProgress"];
-        updateLoad(stage, percent, totalProgress, currentProgress);
+        updateLoad(type, stage, percent, totalProgress, currentProgress);
     })
     .catch(error => {
         clearInterval(loadStatusIntervalId);
@@ -454,8 +526,9 @@ $(document).ready(function() {
     document.getElementById("submit-tabs-default_open").click();
     selectedBackendElem = document.getElementById("backend-wikidata");
 
-    // Initialize the editor.
+    // Initialize the SQL editor.
     sqlEditor = CodeMirror.fromTextArea(document.getElementById("submit-sql-query"), {
+        mode: "sql",
         indentWithTabs: true,
         smartIndent: false,
         lineNumbers: true,
@@ -471,15 +544,17 @@ $(document).ready(function() {
     // Fix query editor code lines overlapping with code
     // According to https://github.com/mdn/bob/issues/976 this is fixed in CodeMirror v6
     editor.refresh();
-    sqlEditor.refresh()
+    sqlEditor.refresh();
 
     // Process params in URL
-    if (urlParams.has("query")) {
-        const query = urlParams.get("query");
+    // Fill in data
+    // SPARQL
+    if (urlParams.has("SPARQL_query")) {
+        const query = urlParams.get("SPARQL_query");
         editor.getDoc().setValue(query);
     }
-    if (urlParams.has("backend")) {
-        const backend = urlParams.get("backend");
+    if (urlParams.has("SPARQL_backend")) {
+        const backend = urlParams.get("SPARQL_backend");
         const dropdownOptionsElem = document.getElementById("submit-sparql-dropdown-options");
         let listItems = dropdownOptionsElem.getElementsByTagName("li");
         for (const listItem of listItems) {
@@ -491,13 +566,25 @@ $(document).ready(function() {
             }
         }
     }
-    if (urlParams.has("query") && urlParams.has("backend")) {
+
+    // SQL
+    if (urlParams.has("SQL_query")) {
+        const query = urlParams.get("SQL_query");
+        sqlEditor.getDoc().setValue(query);
+    }
+
+    // Process request
+    if (urlParams.has("SPARQL_query") && urlParams.has("SPARQL_backend")) {
         // User wants to send a SPARQL query
-        const query = urlParams.get("query");
-        const backend = urlParams.get("backend");
-        fetchQuery(query, backend);
+        const query = urlParams.get("SPARQL_query");
+        const backend = urlParams.get("SPARQL_backend");
+        fetchSPARQLQuery(query, backend);
+    } else if (urlParams.has("SQL_query")) {
+        // User wants to send a SQL query
+        const query = urlParams.get("SQL_query");
+        fetchSPARQLQuery(query);
     } else {
-        // No useful information in url => Show submit menu
+        // No useful information in URL => Show submit menu
         setSubmitMenuVisible(true);
     }
 });
@@ -518,11 +605,14 @@ document.getElementById("options-submit").onclick = function() {
 function onClickSubmitButton() {
     switch (tabName) {
         case "sparql":
-            const query = editor.getDoc().getValue();
+            const SPARQLQuery = editor.getDoc().getValue();
             const backend = selectedBackendElem.getAttribute("data-url")
-            fetchQuery(query, backend);
+            fetchSPARQLQuery(SPARQLQuery, backend);
             break;
-
+        case "sql":
+            const SQLQuery = sqlEditor.getDoc().getValue();
+            fetchSQLQuery(SQLQuery);
+            break;
         case "geoJson":
             const fileElem = document.getElementById("submit-geoJson-file");
             const file = fileElem.files[0];

@@ -10,7 +10,6 @@ void GeoJSONRequestor::request() {
   std::lock_guard<std::mutex> guard(_m);
 
   if (_ready) {
-    // nothing to do
     return;
   }
   if (!_cache->ready()) {
@@ -58,9 +57,9 @@ std::vector<std::pair<std::string, std::string>> GeoJSONRequestor::requestRow(ui
     throw std::runtime_error("Geom cache not ready");
   }
 
-  std::map<std::string, std::string> attrRow = _cache->getAttrRow(row);
+  std::map<std::string, std::string> rowAttr = _cache->getRowAttr(row);
   std::vector<std::pair<std::string, std::string>> res;
-  for (auto const& entry : attrRow) {
+  for (auto const& entry : rowAttr) {
     std::string key = entry.first;
     std::string val = entry.second;
     std::pair<std::string, std::string> pair{key, val};

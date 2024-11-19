@@ -9,7 +9,7 @@
 
 #include "qlever-petrimaps/server/Server.h"
 #include "util/Misc.h"
-#include "util/http/Server.h"
+#include "util/http/HTTPServer.h"
 #include "util/log/Log.h"
 
 using petrimaps::Server;
@@ -87,7 +87,7 @@ int main(int argc, char** argv) {
   // libpqxx test
   try {
     // Connect to the database
-    std::string conn = "host=localhost port=5432 dbname=test_database user=grandro password=123456";
+    std::string conn = "host=localhost port=5432 dbname=test_database user=test_user password=123456";
     pqxx::connection c(conn.c_str());
 
     // Start a transaction. You always work in one.

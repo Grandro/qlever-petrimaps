@@ -38,7 +38,7 @@ add_custom_command(
 	VERBATIM
 )
 
-add_custom_target(htmlfiles DEPENDS index.h build.h style.h)
+add_custom_target(htmlfiles DEPENDS index.h style.h build.h)
 
 add_dependencies(qlever_petrimaps_dep htmlfiles)
 

@@ -27,7 +27,7 @@ using util::geo::latLngToWebMerc;
 namespace petrimaps {
 class GeomCache {
  public:
-  enum SourceType { backend, geoJSON };
+  enum SourceType {backend, SQL, geoJSON}; // SPARQL, SQL, GeoJSON
 
   virtual ~GeomCache() {
     if (_curl) curl_easy_cleanup(_curl);
@@ -40,6 +40,8 @@ class GeomCache {
     return ready;
   }
 
+  virtual void load(const std::string& cacheDir) = 0;
+
   const virtual util::geo::FPoint& getPoint(ID_TYPE id) const = 0;
   virtual size_t getLine(ID_TYPE id) const = 0;
   virtual size_t getLineEnd(ID_TYPE id) const = 0;
@@ -50,21 +52,18 @@ class GeomCache {
   
   util::geo::DBox getLineBBox(size_t id) const;
 
-  double getLoadStatusPercent(bool total);
-  double getLoadStatusPercent() {
-    return getLoadStatusPercent(false);
-  };
-  int getLoadStatusStage();
+  double getLoadStatusPercentCurrent();
+  virtual double getLoadStatusPercentTotal() = 0;
+  virtual int getLoadStatusStage() = 0;
   size_t getTotalProgress();
-  size_t getCurrentProgress();
+  virtual size_t getCurrentProgress();
 
  protected:
   CURL* _curl;
-  enum _LoadStatusStages { Parse = 1, ParseIds, FromFile};
-  _LoadStatusStages _loadStatusStage = Parse;
 
   std::atomic<size_t> _curRow;
-  size_t _curUniqueGeom = 0, _geometryDuplicates = 0;
+  size_t _curUniqueGeom = 0;
+  size_t _geometryDuplicates = 0;
   size_t _totalSize = 0;
   mutable std::mutex _m;
   bool _ready = false;
@@ -73,6 +72,7 @@ class GeomCache {
 
   static bool pointValid(const util::geo::FPoint& p);
   static bool pointValid(const util::geo::DPoint& p);
+  virtual void insertLine(const util::geo::DLine& l, bool isArea);
 };
 }  // namespace petrimaps
 

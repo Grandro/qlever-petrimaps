@@ -37,7 +37,7 @@ class SPARQLCache : public GeomCache {
     return id + 1 < _lines.size() ? getLine(id + 1) : _linePoints.size();
   }
 
-  std::string load(const std::string& cacheFile);
+  void load(const std::string& cacheDir);
   void request();
   size_t requestSize();
   void requestPart(size_t offset);
@@ -49,25 +49,29 @@ class SPARQLCache : public GeomCache {
   std::pair<std::vector<std::pair<ID_TYPE, ID_TYPE>>, size_t> getRelObjects(
       const std::vector<IdMapping>& id) const;
   const std::string& getBackendURL() const { return _backendUrl; }
+  const std::string getIndexHash() const { return _indexHash; }
 
   void serializeToDisk(const std::string& fname) const;
   void fromDisk(const std::string& fname);
 
  private:
+  enum _LoadStatusStages {Parse = 1, ParseIds, FromFile};
+  _LoadStatusStages _loadStatusStage = Parse;
+
+  double getLoadStatusPercentTotal();
+  int getLoadStatusStage();
+
   std::string _backendUrl;
   uint8_t _curByte;
   ID _curId;
   QLEVER_ID_TYPE _maxQid;
 
   static size_t writeCb(void* contents, size_t size, size_t nmemb, void* userp);
-  static size_t writeCbIds(void* contents, size_t size, size_t nmemb,
-                           void* userp);
-  static size_t writeCbCount(void* contents, size_t size, size_t nmemb,
-                             void* userp);
-  static size_t writeCbString(void* contents, size_t size, size_t nmemb,
-                              void* userp);
+  static size_t writeCbIds(void* contents, size_t size, size_t nmemb, void* userp);
+  static size_t writeCbCount(void* contents, size_t size, size_t nmemb, void* userp);
+  static size_t writeCbString(void* contents, size_t size, size_t nmemb, void* userp);
 
-  // Get right SPARQL query for given backend.
+  // Get SPARQL query for given backend.
   const std::string& getQuery(const std::string& backendUrl) const;
   const std::string& getCountQuery(const std::string& backendUrl) const;
 

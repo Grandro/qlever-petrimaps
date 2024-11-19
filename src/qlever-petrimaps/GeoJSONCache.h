@@ -32,25 +32,27 @@ class GeoJSONCache : public GeomCache {
     return id + 1 < _lines.size() ? getLine(id + 1) : _linePoints.size();
   }
 
-  void load();
+  void load(const std::string& cacheDir);
   void setContent(const std::string& content);
   std::vector<std::pair<ID_TYPE, ID_TYPE>> getRelObjects() const;
-  std::map<std::string, std::string> getAttrRow(size_t row) const {
+  std::map<std::string, std::string> getRowAttr(size_t row) const {
     return _attr.at(row);
   }
  
  private:
+  enum _LoadStatusStages {Parse = 1};
+  _LoadStatusStages _loadStatusStage = Parse;
+
+  double getLoadStatusPercentTotal();
+  int getLoadStatusStage();
+
   std::string _content;
 
-  void insertLine(const util::geo::DLine& l, bool isArea);
   // Map geomID to map<key, value>
   std::map<size_t, std::map<std::string, std::string>> _attr;
   // ------------------------
   std::vector<std::tuple<util::geo::FPoint, bool>> _points;
   std::vector<std::tuple<size_t, bool>> _lines;
-
- protected:
-    
 };
 } // namespace petrimaps
 

@@ -22,46 +22,15 @@
 
 using petrimaps::GeomCache;
 
-// _____________________________________________________________________________
-double GeomCache::getLoadStatusPercent(bool total) {
-  /*
-  There are 2 loading stages: Parse, afterwards ParseIds.
-  Because ParseIds is usually pretty short, we merge the progress of both stages
-  to one total progress. Progress is calculated by _curRow / _totalSize, which
-  are handled by each stage individually.
-  */
+
+double GeomCache::getLoadStatusPercentCurrent() {
   if (_totalSize == 0) {
     return 0.0;
   }
-  if (!total) {
-    double percent = _curRow / static_cast<double>(_totalSize) * 100.0;
-    return std::min(100.0, percent);
-  }
 
-  double parsePercent = 95.0;
-  double parseIdsPercent = 5.0;
-  double totalPercent = 0.0;
-  switch (_loadStatusStage) {
-    case _LoadStatusStages::Parse:
-      totalPercent = _curRow / static_cast<double>(_totalSize) * parsePercent;
-      break;
-
-    case _LoadStatusStages::ParseIds:
-      totalPercent = parsePercent;
-      totalPercent +=
-          _curRow / static_cast<double>(_totalSize) * parseIdsPercent;
-      break;
-
-    case _LoadStatusStages::FromFile:
-      totalPercent = _curRow / static_cast<double>(_totalSize) * 100.0;
-      break;
-  }
-
-  return std::min(100.0, totalPercent);
+  double percent = _curRow / static_cast<double>(_totalSize) * 100.0;
+  return std::min(100.0, percent);
 }
-
-// _____________________________________________________________________________
-int GeomCache::getLoadStatusStage() { return _loadStatusStage; }
 
 // _____________________________________________________________________________
 size_t GeomCache::getTotalProgress() { return _totalSize; }
@@ -87,6 +56,67 @@ bool GeomCache::pointValid(const DPoint &p) {
   if (p.getX() < std::numeric_limits<double>::lowest()) return false;
 
   return true;
+}
+
+// _____________________________________________________________________________
+void GeomCache::insertLine(const util::geo::DLine& l, bool isArea) {
+  const auto& bbox = util::geo::getBoundingBox(l);
+  int16_t mainX = (bbox.getLowerLeft().getX() * 10.0) / M_COORD_GRANULARITY;
+  int16_t mainY = (bbox.getLowerLeft().getY() * 10.0) / M_COORD_GRANULARITY;
+
+  if (mainX != 0 || mainY != 0) {
+    util::geo::Point<int16_t> p{mCoord(mainX), mCoord(mainY)};
+    _linePoints.push_back(p);
+  }
+
+  // add bounding box lower left
+  int16_t minorXLoc =
+      (bbox.getLowerLeft().getX() * 10.0) - mainX * M_COORD_GRANULARITY;
+  int16_t minorYLoc =
+      (bbox.getLowerLeft().getY() * 10.0) - mainY * M_COORD_GRANULARITY;
+  util::geo::Point<int16_t> p{minorXLoc, minorYLoc};
+  _linePoints.push_back(p);
+
+  // add bounding box upper left
+  int16_t mainXLoc = (bbox.getUpperRight().getX() * 10.0) / M_COORD_GRANULARITY;
+  int16_t mainYLoc = (bbox.getUpperRight().getY() * 10.0) / M_COORD_GRANULARITY;
+  minorXLoc =
+      (bbox.getUpperRight().getX() * 10.0) - mainXLoc * M_COORD_GRANULARITY;
+  minorYLoc =
+      (bbox.getUpperRight().getY() * 10.0) - mainYLoc * M_COORD_GRANULARITY;
+  if (mainXLoc != mainX || mainYLoc != mainY) {
+    mainX = mainXLoc;
+    mainY = mainYLoc;
+    util::geo::Point<int16_t> p{mCoord(mainX), mCoord(mainY)};
+    _linePoints.push_back(p);
+  }
+  p = util::geo::Point<int16_t>{minorXLoc, minorYLoc};
+  _linePoints.push_back(p);
+
+  // add line points
+  for (const auto& p : l) {
+    mainXLoc = (p.getX() * 10.0) / M_COORD_GRANULARITY;
+    mainYLoc = (p.getY() * 10.0) / M_COORD_GRANULARITY;
+
+    if (mainXLoc != mainX || mainYLoc != mainY) {
+      mainX = mainXLoc;
+      mainY = mainYLoc;
+      util::geo::Point<int16_t> p{mCoord(mainX), mCoord(mainY)};
+      _linePoints.push_back(p);
+    }
+
+    int16_t minorXLoc = (p.getX() * 10.0) - mainXLoc * M_COORD_GRANULARITY;
+    int16_t minorYLoc = (p.getY() * 10.0) - mainYLoc * M_COORD_GRANULARITY;
+    util::geo::Point<int16_t> pp{minorXLoc, minorYLoc};
+    _linePoints.push_back(pp);
+  }
+
+  // if we have an area, we end in a major coord (which is not possible for
+  // other types)
+  if (isArea) {
+    util::geo::Point<int16_t> p{mCoord(0), mCoord(0)};
+    _linePoints.push_back(p);
+  }
 }
 
 // _____________________________________________________________________________

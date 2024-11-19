@@ -10,11 +10,11 @@
 #include <mutex>
 #include <string>
 #include <thread>
-
 #include <png.h>
+
 #include "qlever-petrimaps/GeomCache.h"
 #include "qlever-petrimaps/server/Requestor.h"
-#include "util/http/Server.h"
+#include "util/http/HTTPServer.h"
 #include "util/geo/output/GeoJsonOutput.h"
 
 using namespace util::geo::output;
@@ -37,7 +37,8 @@ class Server : public util::http::Handler {
   static std::string parseUrl(std::string u, std::string pl, Params* params);
 
   util::http::Answer handleHeatMapReq(const Params& pars, int sock) const;
-  util::http::Answer handleQueryReq(const Params& pars) const;
+  util::http::Answer handleSPARQLQueryReq(const Params& pars) const;
+  util::http::Answer handleSQLQueryReq(const Params& pars) const;
   util::http::Answer handleGeoJsonHashReq(const Params& pars) const;
   util::http::Answer handleGeoJsonFileReq(const Params& pars) const;
   util::http::Answer handleGeoJSONReq(const Params& pars) const;
@@ -50,16 +51,14 @@ class Server : public util::http::Handler {
 
   void processGeoJsonOutput(GeoJsonOutput out, const ResObj res, util::json::Val attrs) const;
 
-  void createCache(const std::string& backend, const GeomCache::SourceType srcType) const;
-  std::string loadCache(const std::string& backend) const;
+  std::shared_ptr<GeomCache> createCache(const std::string& source, const GeomCache::SourceType srcType) const;
+  void loadCache(std::shared_ptr<GeomCache> cache, const std::string& source) const;
 
   void clearSession(const std::string& id) const;
   void clearSessions() const;
   void clearOldSessions() const;
 
   std::string getSessionId() const;
-
-  double getLoadStatusPercent() const;
 
   static void pngWriteRowCb(png_structp png_ptr, png_uint_32 row, int pass);
   void writePNG(const unsigned char* data, size_t w, size_t h, int sock) const;
