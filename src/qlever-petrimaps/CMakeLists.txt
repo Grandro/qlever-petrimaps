@@ -25,6 +25,13 @@ add_custom_command(
 )
 
 add_custom_command(
+    	OUTPUT sql.h
+    	COMMAND cd ${PROJECT_BINARY_DIR}/../web/ && xxd -i codemirror/mode/sql/sql.js > ${CMAKE_CURRENT_BINARY_DIR}/sql.h
+    	DEPENDS "${PROJECT_BINARY_DIR}/../web/codemirror/mode/sql/sql.js"
+    	VERBATIM
+)
+
+add_custom_command(
 	OUTPUT style.h
 	COMMAND cd ${PROJECT_BINARY_DIR}/../web/ && sed -e "s/^\\s*//g" -e "s/\\s\\+/ /g" style.css | tr -d '\\n' > build.css && xxd -i build.css > ${CMAKE_CURRENT_BINARY_DIR}/style.h
 	DEPENDS "${PROJECT_BINARY_DIR}/../web/style.css"
@@ -38,7 +45,7 @@ add_custom_command(
 	VERBATIM
 )
 
-add_custom_target(htmlfiles DEPENDS index.h style.h build.h)
+add_custom_target(htmlfiles DEPENDS index.h sql.h style.h build.h)
 
 add_dependencies(qlever_petrimaps_dep htmlfiles)
 

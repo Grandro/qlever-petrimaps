@@ -17,12 +17,13 @@
 #include <vector>
 
 #include "qlever-petrimaps/server/Server.h"
-#include "qlever-petrimaps/build.h"
 #include "qlever-petrimaps/index.h"
+#include "qlever-petrimaps/sql.h"
+#include "qlever-petrimaps/style.h"
+#include "qlever-petrimaps/build.h"
 #include "qlever-petrimaps/server/SPARQLRequestor.h"
 #include "qlever-petrimaps/server/SQLRequestor.h"
 #include "qlever-petrimaps/server/GeoJSONRequestor.h"
-#include "qlever-petrimaps/style.h"
 #include "util/Misc.h"
 #include "util/String.h"
 #include "util/geo/Geo.h"
@@ -102,6 +103,8 @@ util::http::Answer Server::handle(const util::http::Req& req, int con) const {
       a = handleExportReq(params, con);
     } else if (cmd == "/loadstatus") {
       a = handleLoadStatusReq(params);
+    } else if (cmd == "/heatmap") {
+      a = handleHeatMapReq(params, con);
     } else if (cmd == "/build.js") {
       a = util::http::Answer(
           "200 OK", std::string(build_js, build_js + sizeof build_js /
@@ -115,8 +118,14 @@ util::http::Answer Server::handle(const util::http::Req& req, int con) const {
                       build_css + sizeof build_css / sizeof build_css[0]));
       a.params["Content-Type"] = "text/css; charset=utf-8";
       a.params["Cache-Control"] = "public, max-age=10000";
-    } else if (cmd == "/heatmap") {
-      a = handleHeatMapReq(params, con);
+    } else if (cmd == "/sql.js") {
+      a = util::http::Answer(
+          "200 OK", std::string(codemirror_mode_sql_sql_js,
+                                codemirror_mode_sql_sql_js +
+                                sizeof codemirror_mode_sql_sql_js /
+                                sizeof codemirror_mode_sql_sql_js[0]));
+      a.params["Content-Type"] = "application/javascript; charset=utf-8";
+      a.params["Cache-Control"] = "public, max-age=10000";
     } else {
       a = util::http::Answer("404 Not Found", "dunno");
     }
