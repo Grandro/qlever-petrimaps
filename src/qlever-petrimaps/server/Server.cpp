@@ -230,10 +230,11 @@ util::http::Answer Server::handleSQLQueryReq(const Params& pars) const {
   
   LOG(INFO) << "[SERVER] SQL: Query is:\n" << query;
   
-  // Choose "SQL" as source, in the future this could become a database name
-  std::shared_ptr<SQLCache> cache = std::dynamic_pointer_cast<SQLCache>(createCache("SQL", GeomCache::SourceType::SQL));
+  // Choose md5 hash of the query as source
+  std::string queryHash = md5(query);
+  std::shared_ptr<SQLCache> cache = std::dynamic_pointer_cast<SQLCache>(createCache(queryHash, GeomCache::SourceType::SQL));
   cache->setQuery(query);
-  loadCache(cache, "SQL");
+  loadCache(cache, queryHash);
 
   std::string requestId = query;
   std::shared_ptr<SQLRequestor> reqor;
@@ -245,8 +246,8 @@ util::http::Answer Server::handleSQLQueryReq(const Params& pars) const {
       reqor = std::dynamic_pointer_cast<SQLRequestor>(_rs[sessionId]);
     } else {
       reqor = std::shared_ptr<SQLRequestor>(new SQLRequestor(
-          std::dynamic_pointer_cast<SQLCache>(_caches["SQL"]),
-          _maxMemory));
+              std::dynamic_pointer_cast<SQLCache>(_caches[queryHash]),
+              _maxMemory));
       sessionId = getSessionId();
 
       _rs[sessionId] = std::dynamic_pointer_cast<Requestor>(reqor);
