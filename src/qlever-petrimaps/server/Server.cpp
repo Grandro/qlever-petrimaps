@@ -83,6 +83,8 @@ util::http::Answer Server::handle(const util::http::Req& req, int con) const {
       a.params["Content-Type"] = "text/html; charset=utf-8";
     } else if (cmd == "/SPARQLquery") {
       a = handleSPARQLQueryReq(params);
+    } else if (cmd == "/SQLHash") {
+      a = handleSQLHashReq(params);
     } else if (cmd == "/SQLquery") {
       a = handleSQLQueryReq(params);
     } else if (cmd == "/geoJsonHash") {
@@ -223,21 +225,33 @@ util::http::Answer Server::handleSPARQLQueryReq(const Params& pars) const {
 }
 
 // _____________________________________________________________________________
-util::http::Answer Server::handleSQLQueryReq(const Params& pars) const {
-  if (pars.count("SQL_query") == 0 || pars.find("SQL_query")->second.empty())
-    throw std::invalid_argument("No SQL query (?SQL_query=) specified.");
-  std::string query = pars.find("SQL_query")->second;
-  
+util::http::Answer Server::handleSQLHashReq(const Params& pars) const {
+  std::string query = pars.find("query")->second;
+
   LOG(INFO) << "[SERVER] SQL: Query is:\n" << query;
-  
-  // Choose md5 hash of the query as source
+
+  // Create MD5-Hash of query
   std::string queryHash = md5(query);
-  std::shared_ptr<SQLCache> cache = std::dynamic_pointer_cast<SQLCache>(createCache(queryHash, GeomCache::SourceType::SQL));
+  createCache(queryHash, GeomCache::SourceType::SQL);
+  std::shared_ptr<SQLCache> cache =
+      std::dynamic_pointer_cast<SQLCache>(_caches[queryHash]);
   cache->setQuery(query);
   cache->setQueryHash(queryHash);
+
+  auto answ = util::http::Answer("200 OK", queryHash);
+  answ.params["Content-Type"] = "application/json; charset=utf-8";
+
+  return answ;
+}
+
+// _____________________________________________________________________________
+util::http::Answer Server::handleSQLQueryReq(const Params& pars) const {
+  std::string queryHash = pars.find("SQLHash")->second;
+
+  std::shared_ptr<SQLCache> cache = std::dynamic_pointer_cast<SQLCache>(createCache(queryHash, GeomCache::SourceType::SQL));
   loadCache(cache, queryHash);
 
-  std::string requestId = query;
+  std::string requestId = queryHash;
   std::shared_ptr<SQLRequestor> reqor;
   std::string sessionId;
   {
@@ -257,7 +271,7 @@ util::http::Answer Server::handleSQLQueryReq(const Params& pars) const {
   }
 
   try {
-    reqor->request(query);
+    reqor->request();
   } catch (OutOfMemoryError& ex) {
     LOG(ERROR) << ex.what();
 
@@ -292,6 +306,23 @@ util::http::Answer Server::handleSQLQueryReq(const Params& pars) const {
        << ",\"numobjects\":" << numObjs << "}";
 
   auto answ = util::http::Answer("200 OK", json.str());
+  answ.params["Content-Type"] = "application/json; charset=utf-8";
+
+  return answ;
+}
+
+// _____________________________________________________________________________
+util::http::Answer Server::handleGeoJsonHashReq(const Params& pars) const {
+  std::string content = pars.find("geoJsonFile")->second;
+
+  // Create MD5-Hash of content
+  std::string md5_hash = md5(content);
+  createCache(md5_hash, GeomCache::SourceType::geoJSON);
+  std::shared_ptr<GeoJSONCache> cache =
+      std::dynamic_pointer_cast<GeoJSONCache>(_caches[md5_hash]);
+  cache->setContent(content);
+
+  auto answ = util::http::Answer("200 OK", md5_hash);
   answ.params["Content-Type"] = "application/json; charset=utf-8";
 
   return answ;
@@ -354,23 +385,6 @@ util::http::Answer Server::handleGeoJsonFileReq(const Params& pars) const {
        << ",\"numobjects\":" << numObjs << "}";
 
   auto answ = util::http::Answer("200 OK", json.str());
-  answ.params["Content-Type"] = "application/json; charset=utf-8";
-
-  return answ;
-}
-
-// _____________________________________________________________________________
-util::http::Answer Server::handleGeoJsonHashReq(const Params& pars) const {
-  std::string content = pars.find("geoJsonFile")->second;
-
-  // Create MD5-Hash of content
-  std::string md5_hash = md5(content);
-  createCache(md5_hash, GeomCache::SourceType::geoJSON);
-  std::shared_ptr<GeoJSONCache> cache =
-      std::dynamic_pointer_cast<GeoJSONCache>(_caches[md5_hash]);
-  cache->setContent(content);
-
-  auto answ = util::http::Answer("200 OK", md5_hash);
   answ.params["Content-Type"] = "application/json; charset=utf-8";
 
   return answ;

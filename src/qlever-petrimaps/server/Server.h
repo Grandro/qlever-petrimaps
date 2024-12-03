@@ -38,6 +38,7 @@ class Server : public util::http::Handler {
 
   util::http::Answer handleHeatMapReq(const Params& pars, int sock) const;
   util::http::Answer handleSPARQLQueryReq(const Params& pars) const;
+  util::http::Answer handleSQLHashReq(const Params& pars) const;
   util::http::Answer handleSQLQueryReq(const Params& pars) const;
   util::http::Answer handleGeoJsonHashReq(const Params& pars) const;
   util::http::Answer handleGeoJsonFileReq(const Params& pars) const;

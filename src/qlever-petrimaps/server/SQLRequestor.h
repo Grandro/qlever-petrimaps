@@ -21,13 +21,12 @@ class SQLRequestor : public Requestor {
       _createdAt = std::chrono::system_clock::now();
    };
 
-   void request(const std::string& query);
+   void request();
    std::vector<std::pair<std::string, std::string>> requestRow(uint64_t row) const;
    void requestRows(std::function<void(std::vector<std::vector<std::pair<std::string, std::string>>>)> cb) const;
  
  private:
    std::shared_ptr<const SQLCache> _cache;
-   std::string _query;
 };
 } // namespace petrimaps
 

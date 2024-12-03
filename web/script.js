@@ -363,11 +363,22 @@ function fetchSPARQLQuery(query, backend) {
     fetchLoadStatusInterval(1000, "SPARQL", backend_encoded);
 }
 
-function fetchSQLQuery(query) {
-    const query_encoded = encodeURIComponent(query);
-    const url = "SQLquery?SQL_query=" + query_encoded;
-    fetchResults(url);
-    fetchLoadStatusInterval(1000, "SQL", "SQL");
+function fetchSQLQueryHash(query) {
+    // Fetch MD5-Hash of SQL query
+    fetch("SQLHash", {
+        method: "POST",
+        body: "query=" + query,
+        headers: {
+            "Content-type": "application/json; charset=UTF-8"
+        }
+    })
+    .then((response) => response.text())
+    .then(md5_hash => {
+        const url = "SQLquery?SQLHash=" + md5_hash;
+        fetchResults(url);
+        fetchLoadStatusInterval(1000, "SQL", md5_hash);
+    })
+    .catch(error => showError(error));
 }
 
 function fetchGeoJsonHash(content) {
@@ -381,42 +392,17 @@ function fetchGeoJsonHash(content) {
     })
     .then((response) => response.text())
     .then(md5_hash => {
-        fetchGeoJsonFile(md5_hash);
+        const url = "geoJsonFile?geoJsonHash=" + md5_hash;
+        fetchResults(url);
+        fetchLoadStatusInterval(1000, "GeoJson", md5_hash);
     })
     .catch(error => showError(error));
-}
-
-function fetchGeoJsonFile(md5_hash) {
-    // Fetch data using MD5-Hash
-    fetch("geoJsonFile", {
-        method: "POST",
-        body: "geoJsonHash=" + md5_hash,
-        headers: {
-            "Content-type": "application/json; charset=UTF-8"
-        }
-    })
-    .then(response => response.json())
-    .then(data => {
-        clearInterval(loadStatusIntervalId);
-        document.getElementById("submit-button").disabled = false;
-        loadMap(data["qid"], data["bounds"], data["numobjects"]);
-    })
-    .catch(error => {
-        clearInterval(loadStatusIntervalId);
-        document.getElementById("submit-button").disabled = false;
-        showError(error);
-    });
-
-    setSubmitMenuVisible(false);
-    document.getElementById("submit-button").disabled = true;
-    document.getElementById("msg").style.display = "block";
-
-    fetchLoadStatusInterval(1000, "GeoJson", md5_hash);
 }
 
 function fetchResults(url) {
     setSubmitMenuVisible(false);
     document.getElementById("submit-button").disabled = true;
+    document.getElementById("msg").style.display = "block";
 
     fetch(url)
     .then(response => {
@@ -434,8 +420,6 @@ function fetchResults(url) {
         showError(error);
         document.getElementById("submit-button").disabled = false;
     });
-
-    document.getElementById("msg").style.display = "block";
 }
 
 function fetchLoadStatusInterval(interval, type, source) {
@@ -582,7 +566,7 @@ $(document).ready(function() {
     } else if (urlParams.has("SQL_query")) {
         // User wants to send a SQL query
         const query = urlParams.get("SQL_query");
-        fetchSPARQLQuery(query);
+        fetchSQLQueryHash(query);
     } else {
         // No useful information in URL => Show submit menu
         setSubmitMenuVisible(true);
@@ -611,7 +595,7 @@ function onClickSubmitButton() {
             break;
         case "sql":
             const SQLQuery = sqlEditor.getDoc().getValue();
-            fetchSQLQuery(SQLQuery);
+            fetchSQLQueryHash(SQLQuery);
             break;
         case "geoJson":
             const fileElem = document.getElementById("submit-geoJson-file");

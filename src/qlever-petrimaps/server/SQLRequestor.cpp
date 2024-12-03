@@ -6,7 +6,7 @@
 
 using petrimaps::SQLRequestor;
 
-void SQLRequestor::request(const std::string& query) {
+void SQLRequestor::request() {
   std::lock_guard<std::mutex> guard(_m);
 
   if (_ready) {
@@ -17,7 +17,6 @@ void SQLRequestor::request(const std::string& query) {
     throw std::runtime_error("Geom cache not ready");
   }
 
-  _query = query;
   _ready = false;
   _objects.clear();
   _clusterObjects.clear();
