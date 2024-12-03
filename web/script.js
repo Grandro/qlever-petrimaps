@@ -92,14 +92,16 @@ function openPopup(data) {
             curGeojson.remove();
         }
 
-        L.popup({"maxWidth" : 600})
-            .setLatLng(data[0]["ll"])
-            .setContent(popup_html)
-            .openOn(map)
-            .on('remove', function() {
-                curGeojson.remove();
-                curGeojsonId = -1;
-            });
+        L.popup({"maxWidth" : 600,
+                 "maxHeight" : 600
+        })
+        .setLatLng(data[0]["ll"])
+        .setContent(popup_html)
+        .openOn(map)
+        .on('remove', function() {
+            curGeojson.remove();
+            curGeojsonId = -1;
+        });
 
         curGeojson = getGeoJsonLayer(data[0].geom);
         curGeojsonId = data[0].id;
