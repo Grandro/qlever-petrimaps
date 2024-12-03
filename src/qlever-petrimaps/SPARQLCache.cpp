@@ -942,7 +942,7 @@ void SPARQLCache::insertLine(const util::geo::DLine& l, bool isArea) {
 }
 
 // _____________________________________________________________________________
-std::string SPARQLCache::indexHashFromDisk(const std::string& fname) {
+std::string SPARQLCache::indexHashFromFile(const std::string& fname) {
   std::ifstream f(fname, std::ios::binary);
   char tmp[100];
   f.read(tmp, 100);
@@ -952,7 +952,7 @@ std::string SPARQLCache::indexHashFromDisk(const std::string& fname) {
 }
 
 // _____________________________________________________________________________
-void SPARQLCache::fromDisk(const std::string& fname) {
+void SPARQLCache::loadFromFile(const std::string& fname) {
   _loadStatusStage = _LoadStatusStages::FromFile;
 
   _points.clear();
@@ -976,26 +976,27 @@ void SPARQLCache::fromDisk(const std::string& fname) {
   std::streampos posLinePoints;
   std::streampos posLines;
   std::streampos posQidToId;
-  // get total num points
-  // points
+  
+  // Get _totalSize
+  // _points
   f.read(reinterpret_cast<char*>(&numPoints), sizeof(size_t));
   _points.resize(numPoints);
   posPoints = f.tellg();
   f.seekg(sizeof(util::geo::FPoint) * numPoints, f.cur);
 
-  // linePoints
+  // _linePoints
   f.read(reinterpret_cast<char*>(&numLinePoints), sizeof(size_t));
   _linePoints.resize(numLinePoints);
   posLinePoints = f.tellg();
   f.seekg(sizeof(util::geo::Point<int16_t>) * numLinePoints, f.cur);
 
-  // lines
+  // _lines
   f.read(reinterpret_cast<char*>(&numLines), sizeof(size_t));
   _lines.resize(numLines);
   posLines = f.tellg();
   f.seekg(sizeof(size_t) * numLines, f.cur);
 
-  // qidToId
+  // _qidToId
   f.read(reinterpret_cast<char*>(&numQidToId), sizeof(size_t));
   _qidToId.resize(numQidToId);
   posQidToId = f.tellg();
@@ -1004,29 +1005,29 @@ void SPARQLCache::fromDisk(const std::string& fname) {
   _totalSize = numPoints + numLinePoints + numLines + numQidToId;
   _curRow = 0;
 
-  // read data from file
-  // points
+  // Read data
+  // _points
   f.seekg(posPoints);
   for (size_t i = 0; i < numPoints; i++) {
     f.read(reinterpret_cast<char*>(&_points[i]), sizeof(util::geo::FPoint));
     _curRow += 1;
   }
 
-  // linePoints
+  // _linePoints
   f.seekg(posLinePoints);
   for (size_t i = 0; i < numLinePoints; i++) {
     f.read(reinterpret_cast<char*>(&_linePoints[i]), sizeof(util::geo::Point<int16_t>));
     _curRow += 1;
   }
 
-  // lines
+  // _lines
   f.seekg(posLines);
   for (size_t i = 0; i < numLines; i++) {
     f.read(reinterpret_cast<char*>(&_lines[i]), sizeof(size_t));
     _curRow += 1;
   }
 
-  // qidToId
+  // _qidToId
   f.seekg(posQidToId);
   for (size_t i = 0; i < numQidToId; i++) {
     f.read(reinterpret_cast<char*>(&_qidToId[i]), sizeof(IdMapping));
@@ -1037,7 +1038,7 @@ void SPARQLCache::fromDisk(const std::string& fname) {
 }
 
 // _____________________________________________________________________________
-void SPARQLCache::serializeToDisk(const std::string& fname) const {
+void SPARQLCache::serializeToFile(const std::string& fname) const {
   std::ofstream f;
   f.open(fname);
 
@@ -1134,9 +1135,9 @@ void SPARQLCache::load(const std::string& cacheDir) {
     std::string cacheFile = cacheDir + "/" + backend;
     auto indexHash = requestIndexHash();
     if (access(cacheFile.c_str(), F_OK) != -1 &&
-        indexHash == indexHashFromDisk(cacheFile)) {
+        indexHash == indexHashFromFile(cacheFile)) {
       LOG(INFO) << "Reading from cache file " << cacheFile << "...";
-      fromDisk(cacheFile);
+      loadFromFile(cacheFile);
       LOG(INFO) << "done ...";
     } else {
       if (access(cacheDir.c_str(), W_OK) != 0) {
@@ -1149,7 +1150,7 @@ void SPARQLCache::load(const std::string& cacheDir) {
       request();
       requestIds();
       LOG(INFO) << "Serializing to cache file " << cacheFile << "...";
-      serializeToDisk(cacheFile);
+      serializeToFile(cacheFile);
       LOG(INFO) << "done ...";
     }
   } else {

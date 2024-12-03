@@ -59,7 +59,7 @@ std::vector<std::pair<ID_TYPE, ID_TYPE>> GeoJSONCache::getRelObjects() const {
 }
 
 // _____________________________________________________________________________
-void GeoJSONCache::load(const std::string& cacheDir) {
+void GeoJSONCache::load(const std::string& _cacheDir) {
   _loadStatusStage = _LoadStatusStages::Parse;
 
   json res = json::parse(_content);

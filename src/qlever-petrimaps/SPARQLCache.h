@@ -38,6 +38,7 @@ class SPARQLCache : public GeomCache {
   }
 
   void load(const std::string& cacheDir);
+
   void request();
   size_t requestSize();
   void requestPart(size_t offset);
@@ -51,12 +52,12 @@ class SPARQLCache : public GeomCache {
   const std::string& getBackendURL() const { return _backendUrl; }
   const std::string getIndexHash() const { return _indexHash; }
 
-  void serializeToDisk(const std::string& fname) const;
-  void fromDisk(const std::string& fname);
-
  private:
   enum _LoadStatusStages {Parse = 1, ParseIds, FromFile};
   _LoadStatusStages _loadStatusStage = Parse;
+
+  void loadFromFile(const std::string& fname);
+  void serializeToFile(const std::string& fname) const;
 
   double getLoadStatusPercentTotal();
   int getLoadStatusStage();
@@ -82,7 +83,7 @@ class SPARQLCache : public GeomCache {
   util::geo::FPoint parsePoint(const std::string& a, size_t p) const;
 
   void insertLine(const util::geo::DLine& l, bool isArea);
-  std::string indexHashFromDisk(const std::string& fname);
+  std::string indexHashFromFile(const std::string& fname);
 
   size_t _pointsFSize;
   size_t _linePointsFSize;

@@ -44,7 +44,7 @@ int main(int argc, char** argv) {
   int cacheLifetime = 6 * 60;
   double maxMemoryGB =
       (sysconf(_SC_PHYS_PAGES) * sysconf(_SC_PAGE_SIZE) * 0.9) / 1000000000;
-  std::string cacheDir;
+  std::string cacheDir = "";
 
   for (int i = 1; i < argc; i++) {
     std::string cur = argv[i];

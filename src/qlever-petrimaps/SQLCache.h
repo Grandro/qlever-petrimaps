@@ -34,19 +34,26 @@ class SQLCache : public GeomCache {
   }
 
   void load(const std::string& cacheDir);
+
   std::vector<std::pair<ID_TYPE, ID_TYPE>> getRelObjects() const;
   std::map<std::string, std::string> getRowAttr(size_t rowId) const;
   void setQuery(std::string query);
+  void setQueryHash(std::string queryHash);
  
  private:
   enum _LoadStatusStages {RowCountQuery = 1, FinalQuery, Parse, FromFile};
   _LoadStatusStages _loadStatusStage = RowCountQuery;
+
+  void loadNew();
+  void loadFromFile(const std::string& fname);
+  void serializeToFile(const std::string& fname) const;
 
   double getLoadStatusPercentTotal();
   int getLoadStatusStage();
   size_t getCurrentProgress();
 
   std::string _query;
+  std::string _queryHash;
   std::string _createCacheViewQuery;
   std::string _finalQuery;
 
@@ -54,7 +61,6 @@ class SQLCache : public GeomCache {
   std::vector<std::tuple<size_t, bool>> _lines;
 
   std::vector<std::string> _resultColumnNames;
-  std::string _queryHash;
   std::map<size_t, size_t> _rowIdToResultTableRowId;
   std::vector<size_t> _geomColumnIdxs;
   std::vector<size_t> _nonGeomColumnIdxs;

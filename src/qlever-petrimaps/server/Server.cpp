@@ -234,6 +234,7 @@ util::http::Answer Server::handleSQLQueryReq(const Params& pars) const {
   std::string queryHash = md5(query);
   std::shared_ptr<SQLCache> cache = std::dynamic_pointer_cast<SQLCache>(createCache(queryHash, GeomCache::SourceType::SQL));
   cache->setQuery(query);
+  cache->setQueryHash(queryHash);
   loadCache(cache, queryHash);
 
   std::string requestId = query;
