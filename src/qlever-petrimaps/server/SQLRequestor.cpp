@@ -59,15 +59,9 @@ std::vector<std::pair<std::string, std::string>> SQLRequestor::requestRow(uint64
   }
 
   std::map<std::string, std::string> rowAttr = _cache->getRowAttr(row);
-  std::vector<std::pair<std::string, std::string>> res;
-  for (auto const& entry : rowAttr) {
-    std::string key = entry.first;
-    std::string val = entry.second;
-    std::pair<std::string, std::string> pair{key, val};
-    res.push_back(pair);
-  }
+  std::vector<std::pair<std::string, std::string>> pairs = getRowAttrPairs(rowAttr);
 
-  return res;
+  return pairs;
 }
 
 void SQLRequestor::requestRows(std::function<void(std::vector<std::vector<std::pair<std::string, std::string>>>)> cb) const {
@@ -75,14 +69,27 @@ void SQLRequestor::requestRows(std::function<void(std::vector<std::vector<std::p
     throw std::runtime_error("Geom cache not ready");
   }
 
+  std::vector<std::map<std::string, std::string>> attr = _cache->getAttr();
   std::vector<std::vector<std::pair<std::string, std::string>>> res;
-  auto relObjects = _cache->getRelObjects();
-  for(auto const& object : relObjects) {
-    // vector<pair<geomID, Row>>
-    // geomID starts from 0 ascending, Row = geomID
-    ID_TYPE row = object.second;
-    auto rowAttr = requestRow(row);
-    res.push_back(rowAttr);
+  res.reserve(attr.size());
+  for (size_t i = 0; i < attr.size(); i++) {
+    std::map<std::string, std::string> rowAttr = attr[i];
+    std::vector<std::pair<std::string, std::string>> pairs = getRowAttrPairs(rowAttr);
+    res.push_back(pairs);
   }
+  
   cb(res);
+}
+
+std::vector<std::pair<std::string, std::string>> SQLRequestor::getRowAttrPairs(std::map<std::string, std::string> rowAttr) const {
+  std::vector<std::pair<std::string, std::string>> pairs;
+  pairs.reserve(rowAttr.size());
+  for (auto const& keyVal : rowAttr) {
+    std::string key = keyVal.first;
+    std::string val = keyVal.second;
+    std::pair<std::string, std::string> pair{key, val};
+    pairs.push_back(pair);
+  }
+
+  return pairs;
 }

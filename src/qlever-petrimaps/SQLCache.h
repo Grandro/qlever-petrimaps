@@ -37,6 +37,7 @@ class SQLCache : public GeomCache {
 
   std::vector<std::pair<ID_TYPE, ID_TYPE>> getRelObjects() const;
   std::map<std::string, std::string> getRowAttr(size_t rowId) const;
+  std::vector<std::map<std::string, std::string>> getAttr() const;
   void setQuery(std::string query);
   void setQueryHash(std::string queryHash);
  
@@ -56,6 +57,7 @@ class SQLCache : public GeomCache {
   std::string _queryHash;
   std::string _createCacheViewQuery;
   std::string _finalQuery;
+  size_t _batchSize = 100000;
 
   std::vector<std::tuple<util::geo::FPoint, bool>> _points;
   std::vector<std::tuple<size_t, bool>> _lines;
@@ -64,8 +66,8 @@ class SQLCache : public GeomCache {
   std::map<size_t, size_t> _rowIdToResultTableRowId;
   std::vector<size_t> _geomColumnIdxs;
   std::vector<size_t> _nonGeomColumnIdxs;
-  size_t _numPointGeoms;
-  size_t _numLineGeoms;
+  size_t _numGeoms;
+  size_t _rowCount;
 
   // PostgreSQL
   std::string _sqlCredentials = "host=localhost port=5432 dbname=test_database user=test_user password=123456";

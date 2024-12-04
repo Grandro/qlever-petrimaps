@@ -138,15 +138,14 @@ void SQLCache::loadNew() {
   std::string rowCountQuery = "SELECT COUNT(*) FROM (" + _finalQuery + ") AS finalQuery;";
   pqxx::result rowCountQueryResult = processQuery(rowCountQuery);
   const pqxx::field rowCountField = rowCountQueryResult[0][0];
-  size_t rowCount = rowCountField.as<size_t>();
+  _rowCount = rowCountField.as<size_t>();
   // Count geometries instead of rows
-  _totalSize = rowCount * _geomColumnIdxs.size();
+  _totalSize = _rowCount * _geomColumnIdxs.size();
 
   // Process final query and parse
   _curRow = 0;
   _curUniqueGeom = 0;
-  _numPointGeoms = 0;
-  _numLineGeoms = 0;
+  _numGeoms = 0;
   if (_totalSize == 0) {
     throw std::runtime_error("No geometries found.");
   }
@@ -155,17 +154,14 @@ void SQLCache::loadNew() {
   _lines.clear();
   _linePoints.clear();
 
-  // Process final query in batches to use less total RAM
-  size_t batchSize = 100000;
-
   // Use cursor to process data in batches
   LOG(INFO) << "[GEOMCACHE] Process Query: " << _finalQuery;
   try {
     pqxx::work w(*_sqlConn);
     pqxx::stateless_cursor<pqxx::cursor_base::read_only, pqxx::cursor_base::owned> cursor(w, _finalQuery, "myCursor", false);
-    for (size_t pos = 0; pos < rowCount; pos += batchSize) {
+    for (size_t pos = 0; pos < _rowCount; pos += _batchSize) {
       _loadStatusStage = _LoadStatusStages::FinalQuery;
-      pqxx::result result = cursor.retrieve(pos, pos + batchSize);
+      pqxx::result result = cursor.retrieve(pos, pos + _batchSize);
       
       _loadStatusStage = _LoadStatusStages::Parse;
       parse(result);
@@ -200,12 +196,14 @@ void SQLCache::loadFromFile(const std::string& fname) {
   size_t numLinePoints;
   size_t numLines;
   size_t numRowIdToResultTableRowId;
+  size_t numGeomColumnIdxs;
   size_t numNonGeomColumnIdxs;
   size_t numResultColumnNames;
   std::streampos posPoints;
   std::streampos posLinePoints;
   std::streampos posLines;
   std::streampos posRowIdToResultTableRowId;
+  std::streampos posGeomColumnIdxs;
   std::streampos posNonGeomColumnIdxs;
   std::streampos posResultColumnNames;
 
@@ -233,11 +231,21 @@ void SQLCache::loadFromFile(const std::string& fname) {
   posRowIdToResultTableRowId = f.tellg();
   f.seekg(sizeof(size_t) * 2 * numRowIdToResultTableRowId, f.cur);
 
+  // _geomColumnIdxs
+  f.read(reinterpret_cast<char*>(&numGeomColumnIdxs), sizeof(size_t));
+  _geomColumnIdxs.resize(numGeomColumnIdxs);
+  posGeomColumnIdxs = f.tellg();
+  f.seekg(sizeof(size_t) * numGeomColumnIdxs, f.cur);
+
   // _nonGeomColumnIdxs
   f.read(reinterpret_cast<char*>(&numNonGeomColumnIdxs), sizeof(size_t));
   _nonGeomColumnIdxs.resize(numNonGeomColumnIdxs);
   posNonGeomColumnIdxs = f.tellg();
   f.seekg(sizeof(size_t) * numNonGeomColumnIdxs, f.cur);
+
+  // _rowCount
+  f.read(reinterpret_cast<char*>(&_rowCount), sizeof(size_t));
+  f.seekg(sizeof(size_t), f.cur);
 
   // _resultColumnNames
   f.read(reinterpret_cast<char*>(&numResultColumnNames), sizeof(size_t));
@@ -278,6 +286,12 @@ void SQLCache::loadFromFile(const std::string& fname) {
     f.read(reinterpret_cast<char*>(&rowId), sizeof(size_t));
     f.read(reinterpret_cast<char*>(&resultTableRowId), sizeof(size_t));
     _rowIdToResultTableRowId[rowId] = resultTableRowId;
+  }
+
+  // _geomColumnIdxs
+  f.seekg(posGeomColumnIdxs);
+  for (size_t i = 0; i < numGeomColumnIdxs; i++) {
+    f.read(reinterpret_cast<char*>(&_geomColumnIdxs[i]), sizeof(size_t));
   }
 
   // _nonGeomColumnIdxs
@@ -341,10 +355,18 @@ void SQLCache::serializeToFile(const std::string& fname) const {
     f.write(reinterpret_cast<const char*>(&resultTableRowId), sizeof(size_t));
   }
 
+  // _geomColumnIdxs
+  num = _geomColumnIdxs.size();
+  f.write(reinterpret_cast<const char*>(&num), sizeof(size_t));
+  f.write(reinterpret_cast<const char*>(&_geomColumnIdxs[0]), sizeof(size_t) * num);
+
   // _nonGeomColumnIdxs
   num = _nonGeomColumnIdxs.size();
   f.write(reinterpret_cast<const char*>(&num), sizeof(size_t));
   f.write(reinterpret_cast<const char*>(&_nonGeomColumnIdxs[0]), sizeof(size_t) * num);
+
+  // _rowCount
+  f.write(reinterpret_cast<const char*>(&_rowCount), sizeof(size_t));
 
   // _resultColumnNames
   num = _resultColumnNames.size();
@@ -422,13 +444,12 @@ std::vector<std::pair<ID_TYPE, ID_TYPE>> SQLCache::getRelObjects() const {
     objects.push_back({i, idx});
   }
 
-  idx = 0;
   for (size_t i = 0; i < _lines.size(); i++) {
     bool isFirst = std::get<1>(_lines[i]);
     if (isFirst && i > 0) {
       idx++;
     }
-    objects.push_back({i + I_OFFSET, idx + I_OFFSET});
+    objects.push_back({i + I_OFFSET, idx});
   }
 
   return objects;
@@ -446,10 +467,38 @@ std::map<std::string, std::string> SQLCache::getRowAttr(size_t rowId) const {
     int y = _nonGeomColumnIdxs[i];
     pqxx::field field = row[y + 1];
     std::string columnName = _resultColumnNames[y];
-    LOG(INFO) << "[GEOMCACHE] columnName: " << columnName;
     std::string fieldValue = field.c_str();
-    LOG(INFO) << "[GEOMCACHE] fieldValue: " << fieldValue;
     attr[columnName] = fieldValue;
+  }
+
+  return attr;
+}
+
+// _____________________________________________________________________________
+std::vector<std::map<std::string, std::string>> SQLCache::getAttr() const {
+  // Use cursor to process data in batches
+  std::vector<std::map<std::string, std::string>> attr;
+  attr.reserve(_rowCount);
+
+  try {
+    pqxx::work w(*_sqlConn);
+    pqxx::stateless_cursor<pqxx::cursor_base::read_only, pqxx::cursor_base::owned> cursor(w, _finalQuery, "myCursor", false);
+    for (size_t pos = 0; pos < _rowCount; pos += _batchSize) {
+      pqxx::result result = cursor.retrieve(pos, pos + _batchSize);
+      for (const auto &row: result) {
+        std::map<std::string, std::string> rowAttr;
+        for (size_t i = 0; i < _nonGeomColumnIdxs.size(); i++) {
+          int y = _nonGeomColumnIdxs[i];
+          pqxx::field field = row[y + 1];
+          std::string columnName = _resultColumnNames[y];
+          std::string fieldValue = field.c_str();
+          rowAttr[columnName] = fieldValue;
+        }
+        attr.push_back(rowAttr);
+      }
+    }
+  } catch (const std::exception &e) {
+    throw std::runtime_error(e.what());
   }
 
   return attr;
@@ -784,8 +833,8 @@ size_t SQLCache::parsePoint(std::string WKT, size_t rowNumber, size_t startPos, 
   _curUniqueGeom++;
 
   if (isFirst) {
-    _rowIdToResultTableRowId[_numPointGeoms] = rowNumber;
-    _numPointGeoms++;
+    _rowIdToResultTableRowId[_numGeoms] = rowNumber;
+    _numGeoms++;
   }
 
   return pos;
@@ -814,8 +863,8 @@ size_t SQLCache::parseLineString(std::string WKT, size_t rowNumber, size_t start
   _curUniqueGeom++;
 
   if (isFirst) {
-    _rowIdToResultTableRowId[_numLineGeoms + I_OFFSET] = rowNumber;
-    _numLineGeoms++;
+    _rowIdToResultTableRowId[_numGeoms] = rowNumber;
+    _numGeoms++;
   }
 
   return pos;
@@ -856,8 +905,8 @@ size_t SQLCache::parsePolygon(std::string WKT, size_t rowNumber, size_t startPos
   _curUniqueGeom++;
 
   if (!isMulti || isMultiFirst) {
-    _rowIdToResultTableRowId[_numLineGeoms + I_OFFSET] = rowNumber;
-    _numLineGeoms++;
+    _rowIdToResultTableRowId[_numGeoms] = rowNumber;
+    _numGeoms++;
   }
 
   return pos + 1;
