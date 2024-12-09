@@ -24,6 +24,7 @@ class SQLRequestor : public Requestor {
    void request();
    std::vector<std::pair<std::string, std::string>> requestRow(uint64_t row) const;
    void requestRows(std::function<void(std::vector<std::vector<std::pair<std::string, std::string>>>)> cb) const;
+   void requestRowsIncludeGeom(std::function<void(std::vector<std::vector<std::pair<std::string, std::string>>>)> cb) const;
    std::vector<std::pair<std::string, std::string>> getRowAttrPairs(std::map<std::string, std::string> rowAttr) const;
  
  private:

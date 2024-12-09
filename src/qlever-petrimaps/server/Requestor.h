@@ -39,9 +39,11 @@ class Requestor {
   virtual std::vector<std::pair<std::string, std::string>> requestRow(
       uint64_t) const = 0;
   virtual void requestRows(
-      std::function<
-          void(std::vector<std::vector<std::pair<std::string, std::string>>>)>)
+      std::function<void(std::vector<std::vector<std::pair<std::string, std::string>>>)>)
       const = 0;
+  virtual void requestRowsIncludeGeom(
+      std::function<void(std::vector<std::vector<std::pair<std::string, std::string>>>)>)
+      const {};
 
   void createBboxes(util::geo::FBox& pointBbox, util::geo::DBox& lineBbox);
   void createGrid(util::geo::FBox pointBbox, util::geo::DBox lineBbox);

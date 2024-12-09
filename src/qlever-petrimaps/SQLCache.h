@@ -38,6 +38,7 @@ class SQLCache : public GeomCache {
   std::vector<std::pair<ID_TYPE, ID_TYPE>> getRelObjects() const;
   std::map<std::string, std::string> getRowAttr(size_t rowId) const;
   std::vector<std::map<std::string, std::string>> getAttr() const;
+  std::vector<std::map<std::string, std::string>> getAttrIncludeGeom() const;
   void setQuery(std::string query);
   void setQueryHash(std::string queryHash);
  

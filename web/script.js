@@ -1,4 +1,7 @@
 let sessionId = "";
+let exportUrlCSV = "";
+let exportUrlTSV = "";
+let exportUrlGeoJson = "";
 let curGeojson = null;
 let curGeojsonId = -1;
 let urlParams = new URLSearchParams(window.location.search);
@@ -22,6 +25,7 @@ let firstMapUpdate = true;
 let baseLayers = {} // Match Layer name to layer
 let selectedBaseLayerName = "" // Selected base layer name before map update
 let selectedBackendElem = null;
+
 
 let genError = "<p>Session has been removed from cache.</p> <p> <a href='javascript:location.reload();'>Resend request</a></p>";
 
@@ -229,19 +233,16 @@ function updateMap() {
     firstMapUpdate = false;
 }
 
-function loadMap(id, bounds, numObjects) {
+function loadMap(bounds, numObjects) {
     document.getElementById("msg").style.display = "none";
     document.getElementById("stats").innerHTML = "<span>Showing " + numObjects + " objects</span>";
 
-    sessionId = id;
     updateMap();
 
     const ll = L.Projection.SphericalMercator.unproject({"x": bounds[0][0], "y":bounds[0][1]});
-    const ur =  L.Projection.SphericalMercator.unproject({"x": bounds[1][0], "y":bounds[1][1]});
+    const ur = L.Projection.SphericalMercator.unproject({"x": bounds[1][0], "y":bounds[1][1]});
     const boundsLatLng = [[ll.lat, ll.lng], [ur.lat, ur.lng]];
     map.fitBounds(boundsLatLng);
-
-    document.getElementById("options-ex").style.display = "inline-block";
 }
 
 function updateLoad(type, stage, percent, totalProgress, currentProgress) {
@@ -346,22 +347,11 @@ function fetchSPARQLQuery(query, backend) {
     const query_encoded = encodeURIComponent(query);
     const backend_encoded = encodeURIComponent(backend);
 
-    document.getElementById("options-ex-tsv").onclick = function() {
-        let a = document.createElement("a");
-        a.href = backend + "?query=" + query_encoded + "&action=tsv_export";
-        a.setAttribute("download", "export.tsv");
-        a.click();
-    }
-
-    document.getElementById("options-ex-csv").onclick = function() {
-        let a = document.createElement("a");
-        a.href = backend + "?query=" + query_encoded + "&action=csv_export";
-        a.setAttribute("download", "export.csv");
-        a.click();
-    }
-
-    const url = "SPARQLquery?SPARQL_query=" + query_encoded + "&SPARQL_backend=" + backend_encoded;
-    fetchResults(url);
+    const cmd = "SPARQLquery";
+    const args = new Map();
+    args.set("?SPARQL_query", query_encoded);
+    args.set("&SPARQL_backend", backend_encoded);
+    fetchResults(cmd, args);
     fetchLoadStatusInterval(1000, "SPARQL", backend_encoded);
 }
 
@@ -376,8 +366,10 @@ function fetchSQLQueryHash(query) {
     })
     .then((response) => response.text())
     .then(md5_hash => {
-        const url = "SQLquery?SQLHash=" + md5_hash;
-        fetchResults(url);
+        const cmd = "SQLquery";
+        const args = new Map();
+        args.set("?SQLHash", md5_hash);
+        fetchResults(cmd, args);
         fetchLoadStatusInterval(1000, "SQL", md5_hash);
     })
     .catch(error => showError(error));
@@ -394,17 +386,29 @@ function fetchGeoJsonHash(content) {
     })
     .then((response) => response.text())
     .then(md5_hash => {
-        const url = "geoJsonFile?geoJsonHash=" + md5_hash;
-        fetchResults(url);
+        const cmd = "geonJsonFile";
+        const args = new Map();
+        args.set("?geoJsonHash", md5_hash);
+        fetchResults(cmd, args);
         fetchLoadStatusInterval(1000, "GeoJson", md5_hash);
     })
     .catch(error => showError(error));
 }
 
-function fetchResults(url) {
+function fetchResults(cmd, args) {
     setSubmitMenuVisible(false);
     document.getElementById("submit-button").disabled = true;
     document.getElementById("msg").style.display = "block";
+
+    exportUrlCSV = "";
+    exportUrlTSV = "";
+    exportUrlGeoJson = "";
+
+    // Build url
+    let url = cmd;
+    for (let [key, value] of args) {
+        url += key + "=" + value;
+    }
 
     fetch(url)
     .then(response => {
@@ -412,20 +416,48 @@ function fetchResults(url) {
         return response;
     })
     .then(response => response.json())
-    .then(data => {
-        clearInterval(loadStatusIntervalId);
-        loadMap(data["qid"], data["bounds"], data["numobjects"]);
-        document.getElementById("submit-button").disabled = false;
-    })
-    .catch(error => {
-        clearInterval(loadStatusIntervalId);
-        showError(error);
-        document.getElementById("submit-button").disabled = false;
-    });
+    .then(data => fetchResultsSuccess(data, cmd, args))
+    .catch(error => fetchResultsError(error));
+}
+
+function fetchResultsSuccess(data, cmd, args) {
+    document.getElementById("options-ex").style.display = "inline-block";
+    document.getElementById("submit-button").disabled = false;
+
+    clearInterval(loadStatusIntervalId);
+    sessionId = data["qid"];
+    loadMap(data["bounds"], data["numobjects"]);
+
+    switch (cmd) {
+        case "SPARQLquery":
+            const backend_encoded = args.get("&SPARQL_backend");
+            const query_encoded = args.get("?SPARQL_query");
+            exportUrlCSV = backend_encoded + "?query=" + query_encoded + "&action=csv_export";
+            exportUrlTSV = backend_encoded + "?query=" + query_encoded + "&action=tsv_export";
+            exportUrlGeoJson = "export?type=GeoJson&id=" + sessionId;
+            break;
+        case "SQLquery":
+            exportUrlCSV = "export?type=CSV&id=" + sessionId;
+            exportUrlTSV = "export?type=TSV&id=" + sessionId;
+            exportUrlGeoJson = "export?type=GeoJson&id=" + sessionId;
+            break;
+        case "geoJsonFile":
+            // Not implemented yet in the backend
+            exportUrlCSV = "";
+            exportUrlTSV = "";
+            exportUrlGeoJson = "";
+            break;
+    }
+}
+
+function fetchResultsError(error) {
+    document.getElementById("submit-button").disabled = false;
+
+    clearInterval(loadStatusIntervalId);
+    showError(error);
 }
 
 function fetchLoadStatusInterval(interval, type, source) {
-    console.log("FETCH LOAD STATUS: ", source);
     fetchLoadStatus(type, source);
     loadStatusIntervalId = setInterval(fetchLoadStatus, interval, type, source);
     document.getElementById("load").style.display = "block";
@@ -575,10 +607,26 @@ $(document).ready(function() {
     }
 });
 
+document.getElementById("options-ex-csv").onclick = function() {
+    if (!exportUrlCSV) return;
+    let a = document.createElement("a");
+    a.href = exportUrlCSV;
+    a.setAttribute("download", "export.csv");
+    a.click();
+}
+
+document.getElementById("options-ex-tsv").onclick = function() {
+    if (!exportUrlTSV) return;
+    let a = document.createElement("a");
+    a.href = exportUrlTSV;
+    a.setAttribute("download", "export.tsv");
+    a.click();
+}
+
 document.getElementById("options-ex-geojson").onclick = function() {
-    if (!sessionId) return;
+    if (!exportUrlGeoJson) return;
     const a = document.createElement("a");
-    a.href = "export?id="+ sessionId;
+    a.href = exportUrlGeoJson;
     a.setAttribute("download", "export.json");
     a.click();
 }

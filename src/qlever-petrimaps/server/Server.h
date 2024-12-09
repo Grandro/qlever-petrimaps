@@ -32,6 +32,9 @@ class Server : public util::http::Handler {
 
   virtual util::http::Answer handle(const util::http::Req& request,
                                     int connection) const;
+  
+  static void processGeoJsonOutput(GeoJsonOutput out, const ResObj res, util::json::Val attrs);
+  static void sendStringStreamToSocket(std::stringstream& ss, int sock);
 
  private:
   static std::string parseUrl(std::string u, std::string pl, Params* params);
@@ -49,8 +52,6 @@ class Server : public util::http::Handler {
 
   util::http::Answer handleExportReq(const Params& pars, int sock) const;
   util::http::Answer handleLoadStatusReq(const Params& pars) const;
-
-  void processGeoJsonOutput(GeoJsonOutput out, const ResObj res, util::json::Val attrs) const;
 
   std::shared_ptr<GeomCache> createCache(const std::string& source, const GeomCache::SourceType srcType) const;
   void loadCache(std::shared_ptr<GeomCache> cache, const std::string& source) const;

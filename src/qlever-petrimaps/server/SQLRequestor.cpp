@@ -81,6 +81,23 @@ void SQLRequestor::requestRows(std::function<void(std::vector<std::vector<std::p
   cb(res);
 }
 
+void SQLRequestor::requestRowsIncludeGeom(std::function<void(std::vector<std::vector<std::pair<std::string, std::string>>>)> cb) const {
+  if (!_cache->ready()) {
+    throw std::runtime_error("Geom cache not ready");
+  }
+
+  std::vector<std::map<std::string, std::string>> attr = _cache->getAttrIncludeGeom();
+  std::vector<std::vector<std::pair<std::string, std::string>>> res;
+  res.reserve(attr.size());
+  for (size_t i = 0; i < attr.size(); i++) {
+    std::map<std::string, std::string> rowAttr = attr[i];
+    std::vector<std::pair<std::string, std::string>> pairs = getRowAttrPairs(rowAttr);
+    res.push_back(pairs);
+  }
+  
+  cb(res);
+}
+
 std::vector<std::pair<std::string, std::string>> SQLRequestor::getRowAttrPairs(std::map<std::string, std::string> rowAttr) const {
   std::vector<std::pair<std::string, std::string>> pairs;
   pairs.reserve(rowAttr.size());

@@ -15,6 +15,7 @@
 #include <set>
 #include <unordered_set>
 #include <vector>
+#include <functional>
 
 #include "qlever-petrimaps/server/Server.h"
 #include "qlever-petrimaps/index.h"
@@ -74,6 +75,8 @@ util::http::Answer Server::handle(const util::http::Req& req, int con) const {
   try {
     Params params;
     auto cmd = parseUrl(req.url, req.payload, &params);
+
+    LOG(INFO) << "[SERVER] Handle command: " << cmd;
 
     if (cmd == "/") {
       a = util::http::Answer(
@@ -624,15 +627,87 @@ util::http::Answer Server::handlePosReq(const Params& pars) const {
 }
 
 // _____________________________________________________________________________
+void requestRowsCbCSVTSV(std::vector<std::vector<std::pair<std::string, std::string>>> rows, int sock, std::string type) {
+  std::stringstream ss;
+  ss << std::setprecision(10);
+
+  for (size_t rowId = 0; rowId < rows.size(); rowId++) {
+    std::vector<std::pair<std::string, std::string>>& row = rows[rowId];
+
+    // attrNames
+    if (rowId == 0) {
+      for (size_t i = 0; i < row.size(); i++) {
+        std::pair<std::string, std::string> attrs = row[i];
+        std::string key = attrs.first;
+        ss << key;
+        if (i < row.size() - 1) {
+          if (type == "CSV") {
+            ss << ",";
+          } else if (type == "TSV") {
+            ss << "\t";
+          }
+        }
+      }
+      ss << "\n";
+    }
+
+    for (size_t i = 0; i < row.size(); i++) {
+      std::pair<std::string, std::string> attrs = row[i];
+      std::string val = "\"" + util::jsonStringEscape(attrs.second) + "\"";
+      ss << val;
+      if (i < row.size() - 1) {
+        if (type == "CSV") {
+          ss << ",";
+        } else if (type == "TSV") {
+          ss << "\t";
+        }
+      }
+    }
+    ss << "\n";
+  }
+  
+  Server::sendStringStreamToSocket(ss, sock);
+}
+
+// _____________________________________________________________________________
+void requestRowsCbGeoJson(std::vector<std::vector<std::pair<std::string, std::string>>> rows, int sock, std::shared_ptr<petrimaps::Requestor> reqor) {
+  std::stringstream ss;
+  ss << std::setprecision(10);
+  ss << "{\"type\":\"FeatureCollection\",\"features\":[";
+  
+  bool first = true;
+  util::json::Val attrs;
+  for (size_t rowId = 0; rowId < rows.size(); rowId++) {
+    std::vector<std::pair<std::string, std::string>>& row = rows[rowId];
+    ID_TYPE objectId = reqor->getObjectIdFromRowId(rowId);
+    petrimaps::ResObj res = reqor->getGeom(objectId, 0);
+
+    for (size_t j = 0; j < row.size(); j++) {
+      attrs.dict[row[j].first] = row[j].second;
+    }
+
+    GeoJsonOutput geoJsonOut(ss, true);
+    if (!first) ss << ",";
+    Server::processGeoJsonOutput(geoJsonOut, res, attrs);
+    first = false;
+    ss << "\n";
+  }
+  ss << "]}";
+  
+  Server::sendStringStreamToSocket(ss, sock);
+}
+
+// _____________________________________________________________________________
 util::http::Answer Server::handleExportReq(const Params& pars, int sock) const {
   // ignore SIGPIPE
   signal(SIGPIPE, SIG_IGN);
 
-  auto aw = util::http::Answer("200 OK", "");
-
+  if (pars.count("type") == 0 || pars.find("type")->second.empty())
+    throw std::invalid_argument("No type (?type=) specified.");
   if (pars.count("id") == 0 || pars.find("id")->second.empty())
     throw std::invalid_argument("No session id (?id=) specified.");
-  auto id = pars.find("id")->second;
+  std::string type = pars.find("type")->second;
+  std::string id = pars.find("id")->second;
 
   std::shared_ptr<Requestor> reqor;
   {
@@ -649,10 +724,12 @@ util::http::Answer Server::handleExportReq(const Params& pars, int sock) const {
   }
   // as soon as we are ready, the reqor can be read concurrently
 
+  auto aw = util::http::Answer("200 OK", "");
   aw.params["Content-Encoding"] = "identity";
   aw.params["Content-Type"] = "application/json";
   aw.params["Content-Disposition"] = "attachment;filename:\"export.json\"";
   aw.params["Server"] = "qlever-petrimaps";
+  aw.raw = true;
 
   // we do not set the Content-Length header here, but serve until
   // we are done. In particular, we do not need to send our data in chunks, as
@@ -665,79 +742,16 @@ util::http::Answer Server::handleExportReq(const Params& pars, int sock) const {
     ss << kv.first << ": " << kv.second << "\r\n";
 
   ss << "\r\n";
-  ss << "{\"type\":\"FeatureCollection\",\"features\":[";
+  sendStringStreamToSocket(ss, sock);
 
-  std::string buff = ss.str();
-
-  size_t writes = 0;
-
-  while (writes != buff.size()) {
-    int64_t out =
-        send(sock, buff.c_str() + writes, buff.size() - writes, MSG_NOSIGNAL);
-    if (out < 0) {
-      if (errno == EWOULDBLOCK || errno == EAGAIN || errno == EINTR) continue;
-      throw std::runtime_error("Failed to write to socket");
-    }
-    writes += out;
+  if (type == "CSV" || type == "TSV") {
+    auto bindFunc = std::bind(requestRowsCbCSVTSV, std::placeholders::_1, sock, type);
+    reqor->requestRowsIncludeGeom(bindFunc);
+  } else if (type == "GeoJson") {
+    auto bindFunc = std::bind(requestRowsCbGeoJson, std::placeholders::_1, sock, reqor);
+    reqor->requestRows(bindFunc);
   }
 
-  bool first = false;
-  size_t rowId = 0;
-
-  reqor->requestRows(
-      [sock, &first, &rowId, reqor, this](
-          std::vector<std::vector<std::pair<std::string, std::string>>> rows) {
-        std::stringstream ss;
-        ss << std::setprecision(10);
-        util::json::Val attrs;
-        for (size_t i = 0; i < rows.size(); i++) {
-          auto& row = rows[i];
-          ID_TYPE objectId = reqor->getObjectIdFromRowId(rowId);
-          auto res = reqor->getGeom(objectId, 0);
-
-          for (size_t j = 0; j < row.size(); j++) {
-            attrs.dict[row[j].first] = row[j].second;
-          }
-
-          GeoJsonOutput geoJsonOut(ss, true);
-          if (first) ss << ",";
-          processGeoJsonOutput(geoJsonOut, res, attrs);
-          first = true;
-          ss << "\n";
-
-          rowId++;
-        }
-
-        std::string buff = ss.str();
-
-        size_t writes = 0;
-
-        while (writes != buff.size()) {
-          int64_t out = send(sock, buff.c_str() + writes, buff.size() - writes,
-                             MSG_NOSIGNAL);
-          if (out < 0) {
-            if (errno == EWOULDBLOCK || errno == EAGAIN || errno == EINTR)
-              continue;
-            throw std::runtime_error("Failed to write to socket");
-          }
-          writes += out;
-        }
-      });
-
-  buff = "]}";
-  writes = 0;
-
-  while (writes != buff.size()) {
-    int64_t out =
-        send(sock, buff.c_str() + writes, buff.size() - writes, MSG_NOSIGNAL);
-    if (out < 0) {
-      if (errno == EWOULDBLOCK || errno == EAGAIN || errno == EINTR) continue;
-      throw std::runtime_error("Failed to write to socket");
-    }
-    writes += out;
-  }
-
-  aw.raw = true;
   return aw;
 }
 
@@ -1350,7 +1364,7 @@ std::string Server::getSessionId() const {
 
 // _____________________________________________________________________________
 void Server::processGeoJsonOutput(GeoJsonOutput out, const ResObj res,
-                                  json::Val attrs) const {
+                                  json::Val attrs) {
   if (res.poly.size()) {
     if (res.poly.size() == 1) {
       out.printLatLng(res.poly[0], attrs);
@@ -1369,6 +1383,20 @@ void Server::processGeoJsonOutput(GeoJsonOutput out, const ResObj res,
     } else {
       out.printLatLng(res.pos, attrs);
     }
+  }
+}
+
+// _____________________________________________________________________________
+void Server::sendStringStreamToSocket(std::stringstream& ss, int sock) {
+  std::string buff = ss.str();
+  size_t writes = 0;
+  while (writes != buff.size()) {
+    int64_t out = send(sock, buff.c_str() + writes, buff.size() - writes, MSG_NOSIGNAL);
+    if (out < 0) {
+      if (errno == EWOULDBLOCK || errno == EAGAIN || errno == EINTR) continue;
+      throw std::runtime_error("Failed to write to socket");
+    }
+    writes += out;
   }
 }
 
