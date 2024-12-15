@@ -76,8 +76,6 @@ util::http::Answer Server::handle(const util::http::Req& req, int con) const {
     Params params;
     auto cmd = parseUrl(req.url, req.payload, &params);
 
-    LOG(INFO) << "[SERVER] Handle command: " << cmd;
-
     if (cmd == "/") {
       a = util::http::Answer(
           "200 OK",

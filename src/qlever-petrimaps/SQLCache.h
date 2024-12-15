@@ -47,8 +47,8 @@ class SQLCache : public GeomCache {
   _LoadStatusStages _loadStatusStage = RowCountQuery;
 
   void loadNew();
-  void loadFromFile(const std::string& fname);
   void serializeToFile(const std::string& fname) const;
+  void loadFromFile(const std::string& fname);
 
   double getLoadStatusPercentTotal();
   int getLoadStatusStage();
@@ -56,7 +56,6 @@ class SQLCache : public GeomCache {
 
   std::string _query;
   std::string _queryHash;
-  std::string _createCacheViewQuery;
   std::string _finalQuery;
   size_t _batchSize = 100000;
 
@@ -74,7 +73,7 @@ class SQLCache : public GeomCache {
   std::string _sqlCredentials = "host=localhost port=5432 dbname=test_database user=test_user password=123456";
   pqxx::connection* _sqlConn;
 
-  pqxx::result processQuery(std::string query, int limit = -1, int offset = -1, bool commit = false) const;
+  pqxx::result processQuery(std::string query, int limit = -1, int offset = -1) const;
   std::vector<std::string> expandSelectStatements(std::vector<std::string> selectStatements, std::map<pqxx::oid, std::string> originColumnTables,
                                                   std::string afterSelectStatementsString);
   bool isStatementInParentheses(std::string statement, size_t pos);

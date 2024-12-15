@@ -1,6 +1,6 @@
-// Copyright 2022, University of Freiburg,
+// Copyright 2024, University of Freiburg,
 // Chair of Algorithms and Data Structures.
-// Authors: Patrick Brosi <brosi@informatik.uni-freiburg.de>
+// Authors: Grandro
 
 #include <regex>
 #include <chrono>
@@ -130,7 +130,6 @@ void SQLCache::loadNew() {
 
   // Build final query using ST_AsText
   buildFinalQuery(expandedSelectStatements, columnTypes, originColumnTypes, afterSelectStatementsString);
-  processQuery(_createCacheViewQuery, -1, -1, true);
   
   // Build row count query
   _loadStatusStage = _LoadStatusStages::RowCountQuery;
@@ -181,6 +180,64 @@ void SQLCache::loadNew() {
 }
 
 // _____________________________________________________________________________
+void SQLCache::serializeToFile(const std::string& fname) const {
+  std::ofstream f;
+  f.open(fname);
+
+  // _points
+  size_t num = _points.size();
+  f.write(reinterpret_cast<const char*>(&num), sizeof(size_t));
+  f.write(reinterpret_cast<const char*>(&_points[0]),
+          sizeof(std::tuple<util::geo::FPoint, bool>) * num);
+  
+  // _linePoints
+  num = _linePoints.size();
+  f.write(reinterpret_cast<const char*>(&num), sizeof(size_t));
+  f.write(reinterpret_cast<const char*>(&_linePoints[0]),
+          sizeof(util::geo::Point<int16_t>) * num);
+  
+  // _lines
+  num = _lines.size();
+  f.write(reinterpret_cast<const char*>(&num), sizeof(size_t));
+  f.write(reinterpret_cast<const char*>(&_lines[0]), sizeof(std::tuple<size_t, bool>) * num);
+
+  // _rowIdToResultTableRowId
+  num = _rowIdToResultTableRowId.size();
+  f.write(reinterpret_cast<const char*>(&num), sizeof(size_t));
+  for (auto const& keyValue : _rowIdToResultTableRowId) {
+    size_t rowId = keyValue.first;
+    size_t resultTableRowId = keyValue.second;
+    f.write(reinterpret_cast<const char*>(&rowId), sizeof(size_t));
+    f.write(reinterpret_cast<const char*>(&resultTableRowId), sizeof(size_t));
+  }
+
+  // _nonGeomColumnIdxs
+  num = _nonGeomColumnIdxs.size();
+  f.write(reinterpret_cast<const char*>(&num), sizeof(size_t));
+  f.write(reinterpret_cast<const char*>(&_nonGeomColumnIdxs[0]), sizeof(size_t) * num);
+
+  // _rowCount
+  f.write(reinterpret_cast<const char*>(&_rowCount), sizeof(size_t));
+
+  // _finalQuery
+  size_t finalQueryLength = _finalQuery.length();
+  f.write(reinterpret_cast<const char*>(&finalQueryLength), sizeof(size_t));
+  f.write(_finalQuery.c_str(), finalQueryLength);
+
+  // _resultColumnNames
+  num = _resultColumnNames.size();
+  f.write(reinterpret_cast<const char*>(&num), sizeof(size_t));
+  for (size_t i = 0; i < num; i++) {
+    std::string resultColumnName = _resultColumnNames[i];
+    size_t resultColumnNameLength = resultColumnName.length();
+    f.write(reinterpret_cast<const char*>(&resultColumnNameLength), sizeof(size_t));
+    f.write(resultColumnName.c_str(), resultColumnNameLength);
+  }
+
+  f.close();
+}
+
+// _____________________________________________________________________________
 void SQLCache::loadFromFile(const std::string& fname) {
   _loadStatusStage = _LoadStatusStages::FromFile;
 
@@ -204,6 +261,7 @@ void SQLCache::loadFromFile(const std::string& fname) {
   std::streampos posRowIdToResultTableRowId;
   std::streampos posNonGeomColumnIdxs;
   std::streampos posResultColumnNames;
+  std::streampos posFinalQuery;
 
   // Retrieve num and pos
   // _points
@@ -238,6 +296,16 @@ void SQLCache::loadFromFile(const std::string& fname) {
   // _rowCount
   f.read(reinterpret_cast<char*>(&_rowCount), sizeof(size_t));
   f.seekg(sizeof(size_t), f.cur);
+
+  // _finalQuery
+  size_t finalQueryLength;
+  f.read(reinterpret_cast<char*>(&finalQueryLength), sizeof(size_t));
+  _finalQuery.reserve(finalQueryLength);
+  char* temp = new char[finalQueryLength + 1];
+  f.read(temp, finalQueryLength);
+  temp[finalQueryLength] = 0;
+  _finalQuery = temp;
+  f.seekg(finalQueryLength, f.cur);
 
   // _resultColumnNames
   f.read(reinterpret_cast<char*>(&numResultColumnNames), sizeof(size_t));
@@ -301,62 +369,6 @@ void SQLCache::loadFromFile(const std::string& fname) {
     resultColumnName = temp;
 
     _resultColumnNames[i] = resultColumnName;
-  }
-
-  // Set _finalQuery to be able to retrieve row attributes
-  _finalQuery = "SELECT * FROM \"CACHE_" + _queryHash + "\"";
-
-  f.close();
-}
-
-// _____________________________________________________________________________
-void SQLCache::serializeToFile(const std::string& fname) const {
-  std::ofstream f;
-  f.open(fname);
-
-  // _points
-  size_t num = _points.size();
-  f.write(reinterpret_cast<const char*>(&num), sizeof(size_t));
-  f.write(reinterpret_cast<const char*>(&_points[0]),
-          sizeof(std::tuple<util::geo::FPoint, bool>) * num);
-  
-  // _linePoints
-  num = _linePoints.size();
-  f.write(reinterpret_cast<const char*>(&num), sizeof(size_t));
-  f.write(reinterpret_cast<const char*>(&_linePoints[0]),
-          sizeof(util::geo::Point<int16_t>) * num);
-  
-  // _lines
-  num = _lines.size();
-  f.write(reinterpret_cast<const char*>(&num), sizeof(size_t));
-  f.write(reinterpret_cast<const char*>(&_lines[0]), sizeof(std::tuple<size_t, bool>) * num);
-
-  // _rowIdToResultTableRowId
-  num = _rowIdToResultTableRowId.size();
-  f.write(reinterpret_cast<const char*>(&num), sizeof(size_t));
-  for (auto const& keyValue : _rowIdToResultTableRowId) {
-    size_t rowId = keyValue.first;
-    size_t resultTableRowId = keyValue.second;
-    f.write(reinterpret_cast<const char*>(&rowId), sizeof(size_t));
-    f.write(reinterpret_cast<const char*>(&resultTableRowId), sizeof(size_t));
-  }
-
-  // _nonGeomColumnIdxs
-  num = _nonGeomColumnIdxs.size();
-  f.write(reinterpret_cast<const char*>(&num), sizeof(size_t));
-  f.write(reinterpret_cast<const char*>(&_nonGeomColumnIdxs[0]), sizeof(size_t) * num);
-
-  // _rowCount
-  f.write(reinterpret_cast<const char*>(&_rowCount), sizeof(size_t));
-
-  // _resultColumnNames
-  num = _resultColumnNames.size();
-  f.write(reinterpret_cast<const char*>(&num), sizeof(size_t));
-  for (size_t i = 0; i < num; i++) {
-    std::string resultColumnName = _resultColumnNames[i];
-    size_t resultColumnNameLength = resultColumnName.length();
-    f.write(reinterpret_cast<const char*>(&resultColumnNameLength), sizeof(size_t));
-    f.write(resultColumnName.c_str(), resultColumnNameLength);
   }
 
   f.close();
@@ -439,7 +451,7 @@ std::vector<std::pair<ID_TYPE, ID_TYPE>> SQLCache::getRelObjects() const {
 // _____________________________________________________________________________
 std::map<std::string, std::string> SQLCache::getRowAttr(size_t rowId) const {
   size_t resultTableRowId = _rowIdToResultTableRowId.at(rowId);
-  std::string query = _finalQuery + " WHERE \"$rowNumber\"=" + std::to_string(resultTableRowId);
+  std::string query = "SELECT * FROM (" + _finalQuery + ") AS finalQuery WHERE \"$rowNumber\"=" + std::to_string(resultTableRowId);
   pqxx::result result = processQuery(query);
 
   const pqxx::row row = result[0];
@@ -516,7 +528,7 @@ std::vector<std::map<std::string, std::string>> SQLCache::getAttrIncludeGeom() c
 }
 
 // _____________________________________________________________________________
-pqxx::result SQLCache::processQuery(std::string query, int limit, int offset, bool commit) const {
+pqxx::result SQLCache::processQuery(std::string query, int limit, int offset) const {
   query = setQueryLimitOffset(query, limit, offset);
   LOG(INFO) << "[GEOMCACHE] Process Query: " << query;
 
@@ -527,11 +539,6 @@ pqxx::result SQLCache::processQuery(std::string query, int limit, int offset, bo
 
     // Execute query
     result = w.exec(query);
-
-    // Optional: Commit query
-    if (commit) {
-      w.commit();
-    }
 
   } catch (const std::exception &e) {
     throw std::runtime_error(e.what());
@@ -546,8 +553,6 @@ std::vector<std::string> SQLCache::expandSelectStatements(std::vector<std::strin
   std::vector<std::string> expandedSelectStatements;
   expandedSelectStatements.reserve(selectStatements.size());
 
-  LOG(INFO) << "[GEOMCACHE] afterSelectStatementsString: " << afterSelectStatementsString;
-  
   // RegEx to find select statements containing *. Unescaped: (?<!\()[^\s,()]+\.\*(?!\))|(?<!\()\*(?!\))
   // std::regex starPattern("(?<!\\()[^\\s,()]+\\.\\*(?!\\))|(?<!\\()\\*(?!\\))");
   
@@ -555,6 +560,7 @@ std::vector<std::string> SQLCache::expandSelectStatements(std::vector<std::strin
   std::regex starPattern("[^\\s,]+\\.\\*|\\*");
   for (size_t i = 0; i < selectStatements.size(); i++) {
     std::string selectStatement = selectStatements[i];
+
     LOG(INFO) << "[GEOMCACHE] selectStatement: " << selectStatement;
     // Is star select statement?
     std::smatch matchResult;
@@ -635,7 +641,14 @@ std::string SQLCache::getSelectStatementsString(std::string query) {
 std::string SQLCache::getAfterSelectStatementsString(std::string query) {
   std::string lowerQuery = util::toLower(query);
   size_t fromPosStart = lowerQuery.find("from");
-  std::string afterSelectStatementsString = query.substr(fromPosStart);
+
+  // Delete trailing whitespace and semicolon if it exists
+  size_t endPos = lowerQuery.find_last_not_of(" ");
+  if (lowerQuery[endPos] != ';') {
+    endPos++;
+  }
+
+  std::string afterSelectStatementsString = query.substr(fromPosStart, endPos - fromPosStart);
 
   return afterSelectStatementsString;
 }
@@ -714,10 +727,6 @@ void SQLCache::buildFinalQuery(std::vector<std::string> expandedSelectStatements
   _geomColumnIdxs.clear();
   _nonGeomColumnIdxs.clear();
 
-  // When creating a view we cannot select a column twice.
-  // Thus we have to give each column a unique alias.
-  size_t alias_idx = 0;
-
   // Add expanded select statements
   std::string expandedSelectStatementsString = "";
   for (size_t i = 0; i < expandedSelectStatements.size(); i++) {
@@ -726,23 +735,28 @@ void SQLCache::buildFinalQuery(std::vector<std::string> expandedSelectStatements
     std::string originColumnType = originColumnTypes[columnType];
 
     if (originColumnType == "geometry") {
-      expandedSelectStatement = "ST_AsText(" + expandedSelectStatement + ")";
+      std::string front = expandedSelectStatement;
+      std::string back = "";
+      size_t startPos = expandedSelectStatement.find_first_not_of(" ");
+      size_t whitespacePos = expandedSelectStatement.find(" ", startPos);
+      if (whitespacePos != std::string::npos) {
+        front = expandedSelectStatement.substr(0, whitespacePos);
+        back = expandedSelectStatement.substr(whitespacePos);
+      }
+      expandedSelectStatement = "ST_AsText(" + front + ")" + back;
+
       _geomColumnIdxs.push_back(i);
     } else {
       _nonGeomColumnIdxs.push_back(i);
     }
 
-    std::string alias = "\"" + std::to_string(alias_idx) + "\"";
-    expandedSelectStatementsString += expandedSelectStatement + " AS " + alias;
+    expandedSelectStatementsString += expandedSelectStatement;
     if (i < expandedSelectStatements.size() - 1) {
       expandedSelectStatementsString += ", ";
     }
-    alias_idx++;
   }
   
   _finalQuery = "SELECT ROW_NUMBER() OVER () AS \"$rowNumber\", " + expandedSelectStatementsString + " " + afterSelectStatementsString;
-  _createCacheViewQuery = "CREATE OR REPLACE VIEW \"CACHE_" + _queryHash + "\" AS " + _finalQuery;
-  _finalQuery = "SELECT * FROM \"CACHE_" + _queryHash + "\"";
 }
 
 // _____________________________________________________________________________
