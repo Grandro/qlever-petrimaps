@@ -78,7 +78,7 @@ jobs:
       - name: Checkout submodules
         run: git submodule update --init --recursive
       - name: install dependencies
-        run: brew install cmake libpng curl libpqxx-dev libpq-dev
+        run: brew install cmake libpng curl libpqxx libpq-dev
       - name: cmake
         run: mkdir build && cd build && cmake ..
       - name: make
