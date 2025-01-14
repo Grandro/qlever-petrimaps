@@ -600,7 +600,7 @@ $(document).ready(function() {
     } else if (urlParams.has("SQL_query")) {
         // User wants to send a SQL query
         const query = urlParams.get("SQL_query");
-        fetchSQLQueryHash(query);
+        fetchSQLQueryHash(encodeURIComponent(query));
     } else {
         // No useful information in URL => Show submit menu
         setSubmitMenuVisible(true);
@@ -645,7 +645,7 @@ function onClickSubmitButton() {
             break;
         case "sql":
             const SQLQuery = sqlEditor.getDoc().getValue();
-            fetchSQLQueryHash(SQLQuery);
+            fetchSQLQueryHash(encodeURIComponent(SQLQuery));
             break;
         case "geoJson":
             const fileElem = document.getElementById("submit-geoJson-file");

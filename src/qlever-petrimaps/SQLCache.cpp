@@ -437,6 +437,10 @@ std::vector<std::pair<ID_TYPE, ID_TYPE>> SQLCache::getRelObjects() const {
     objects.push_back({i, idx});
   }
 
+  if (_points.size() > 0) {
+    idx++;
+  }
+  
   for (size_t i = 0; i < _lines.size(); i++) {
     bool isFirst = std::get<1>(_lines[i]);
     if (isFirst && i > 0) {
