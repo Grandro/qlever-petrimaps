@@ -12,7 +12,7 @@ jobs:
       - name: update apt
         run: sudo apt update
       - name: install dependencies
-        run: sudo apt install -y cmake gcc g++ libpng-dev libcurl4-gnutls-dev libpqxx
+        run: sudo apt install -y cmake gcc g++ libpng-dev libcurl4-gnutls-dev libpqxx-dev libpq-dev
       - name: cmake
         run: mkdir build && cd build && cmake ..
       - name: make
@@ -27,7 +27,7 @@ jobs:
       - name: update apt
         run: sudo apt update
       - name: install dependencies
-        run: sudo apt install -y cmake gcc g++ libpng-dev libcurl4-gnutls-dev libpqxx
+        run: sudo apt install -y cmake gcc g++ libpng-dev libcurl4-gnutls-dev libpqxx-dev libpq-dev
       - name: cmake
         run: mkdir build && cd build && cmake ..
       - name: make
@@ -42,7 +42,7 @@ jobs:
       - name: update apt
         run: sudo apt update
       - name: install dependencies
-        run: sudo apt install -y cmake clang libomp-dev libpng-dev libcurl4-gnutls-dev libpqxx
+        run: sudo apt install -y cmake clang libomp-dev libpng-dev libcurl4-gnutls-dev libpqxx-dev libpq-dev
       - name: cmake
         run: mkdir build && cd build && cmake ..
         shell: bash
@@ -61,7 +61,7 @@ jobs:
       - name: update apt
         run: sudo apt update
       - name: install dependencies
-        run: sudo apt install -y cmake clang libomp-dev libpng-dev libcurl4-gnutls-dev libpqxx
+        run: sudo apt install -y cmake clang libomp-dev libpng-dev libcurl4-gnutls-dev libpqxx-dev libpq-dev
       - name: cmake
         run: mkdir build && cd build && cmake ..
         shell: bash
@@ -78,7 +78,7 @@ jobs:
       - name: Checkout submodules
         run: git submodule update --init --recursive
       - name: install dependencies
-        run: brew install cmake libpng curl libpqxx
+        run: brew install cmake libpng curl libpqxx-dev libpq-dev
       - name: cmake
         run: mkdir build && cd build && cmake ..
       - name: make
@@ -91,7 +91,7 @@ jobs:
       - name: Checkout submodules
         run: git submodule update --init --recursive
       - name: install dependencies
-        run: brew install cmake libpng curl libpqxx
+        run: brew install cmake libpng curl libpqxx-dev libpq-dev
       - name: cmake
         run: mkdir build && cd build && cmake ..
       - name: make
