@@ -15,7 +15,6 @@ class SQLCache : public GeomCache {
   // _____________________________________________________________________________
   SQLCache() {
     _curl = curl_easy_init();
-    _sqlConn = new pqxx::connection(_sqlCredentials.c_str());
   }
 
   SQLCache& operator=(SQLCache&& o) {
@@ -71,7 +70,6 @@ class SQLCache : public GeomCache {
 
   // PostgreSQL
   std::string _sqlCredentials = "host=localhost port=5432 dbname=test_database user=test_user password=123456";
-  pqxx::connection* _sqlConn;
 
   pqxx::result processQuery(std::string query, int limit = -1, int offset = -1) const;
   std::vector<std::string> expandSelectStatements(std::vector<std::string> selectStatements, std::map<pqxx::oid, std::string> originColumnTables,

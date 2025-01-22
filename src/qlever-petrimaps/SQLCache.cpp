@@ -156,7 +156,8 @@ void SQLCache::loadNew() {
   // Use cursor to process data in batches
   LOG(INFO) << "[GEOMCACHE] Process Query: " << _finalQuery;
   try {
-    pqxx::work w(*_sqlConn);
+    pqxx::connection c(_sqlCredentials.c_str());
+    pqxx::work w(c);
     pqxx::stateless_cursor<pqxx::cursor_base::read_only, pqxx::cursor_base::owned> cursor(w, _finalQuery, "myCursor", false);
     for (size_t pos = 0; pos < _rowCount; pos += _batchSize) {
       _loadStatusStage = _LoadStatusStages::FinalQuery;
@@ -478,7 +479,8 @@ std::vector<std::map<std::string, std::string>> SQLCache::getAttr() const {
   attr.reserve(_rowCount);
 
   try {
-    pqxx::work w(*_sqlConn);
+    pqxx::connection c(_sqlCredentials.c_str());
+    pqxx::work w(c);
     pqxx::stateless_cursor<pqxx::cursor_base::read_only, pqxx::cursor_base::owned> cursor(w, _finalQuery, "myCursor", false);
     for (size_t pos = 0; pos < _rowCount; pos += _batchSize) {
       pqxx::result result = cursor.retrieve(pos, pos + _batchSize);
@@ -508,7 +510,8 @@ std::vector<std::map<std::string, std::string>> SQLCache::getAttrIncludeGeom() c
   attr.reserve(_rowCount);
 
   try {
-    pqxx::work w(*_sqlConn);
+    pqxx::connection c(_sqlCredentials.c_str());
+    pqxx::work w(c);
     pqxx::stateless_cursor<pqxx::cursor_base::read_only, pqxx::cursor_base::owned> cursor(w, _finalQuery, "myCursor", false);
     for (size_t pos = 0; pos < _rowCount; pos += _batchSize) {
       pqxx::result result = cursor.retrieve(pos, pos + _batchSize);
@@ -538,8 +541,11 @@ pqxx::result SQLCache::processQuery(std::string query, int limit, int offset) co
 
   pqxx::result result;
   try {
-    // Start a transaction
-    pqxx::work w(*_sqlConn);
+    // Open connection
+    pqxx::connection c(_sqlCredentials.c_str());
+
+    // Start transaction
+    pqxx::work w(c);
 
     // Execute query
     result = w.exec(query);
